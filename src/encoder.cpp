@@ -327,6 +327,8 @@ void verify()
 
 void save_data()
 {
+	char temp[1024];
+	sprintf(temp, "%s.wav", outfilename);
 	drwav_data_format format;
 	format.container = drwav_container_riff;     // <-- drwav_container_riff = normal WAV files, drwav_container_w64 = Sony Wave64.
 	format.format = DR_WAVE_FORMAT_PCM;          // <-- Any of the DR_WAVE_FORMAT_* codes.
@@ -334,7 +336,7 @@ void save_data()
 	format.sampleRate = samplerate;
 	format.bitsPerSample = 8;
 	drwav wav;
-	drwav_init_file_write(&wav, outfilename, &format, NULL);
+	drwav_init_file_write(&wav, temp, &format, NULL);
 	drwav_write_pcm_frames(&wav, chunks * dimensions / channels, unpackeddata);
 	drwav_uninit(&wav);
 }
@@ -354,7 +356,7 @@ int main(int parc, char** pars)
 	else
 		sprintf(outfilename, "%s", pars[2]);
 
-	load_data(pars[1]); // 6.120 -> 5.423 (closest match)
+	load_data(pars[1]);
 	reduce();
 	average_groups();
 	map_indices();
