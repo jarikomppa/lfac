@@ -5,6 +5,8 @@
 #include <math.h>
 #define DR_WAV_IMPLEMENTATION
 #include "../external/dr_wav.h"
+#include <iostream>
+#include "../external/optionparser.h"
 
 #define MAX_DIMENSIONS 16
 #define MAX_GROUPS 256
@@ -20,10 +22,8 @@ int dimensions = 16;
 int datalen = 1024 * 8;
 unsigned char dictionary[MAX_GROUPS * MAX_DIMENSIONS];
 unsigned char* unpackeddata;
-char outfilename[1024];
 
 //#define ROTATE_CHUNKS // "it's a great idea. But it doesn't work."
-//#define USE_EXISTING_CHUNK // hard to tell
 
 void insert_chunk(unsigned char* p)
 {
@@ -118,19 +118,28 @@ FILE* outfile;
 unsigned int channels;
 unsigned int samplerate;
 unsigned int window;
+float* sampledata = NULL;
 
-void load_data(const char * fn)
+void load_data(const char* fn)
 {
 	drwav_uint64 totalPCMFrameCount;
-	float* pSampleData = drwav_open_file_and_read_pcm_frames_f32(fn, &channels, &samplerate, &totalPCMFrameCount, NULL);
+	sampledata = drwav_open_file_and_read_pcm_frames_f32(fn, &channels, &samplerate, &totalPCMFrameCount, NULL);
 	datalen = ((int)totalPCMFrameCount / dimensions) * dimensions; // rounded to "dimensions"
 
-	if (!pSampleData)
+	if (!sampledata)
 	{
 		printf("Failed to load data\n");
 		exit(0);
 	}
-	outfile = fopen(outfilename, "wb");
+}
+
+void resample()
+{
+}
+
+void prep_output(const char*fn)
+{
+	outfile = fopen(fn, "wb");
 	int tag = 'CAFL'; // gets reversed
 	fwrite(&tag, 1, 4, outfile);
 	int version = 0;
@@ -157,10 +166,9 @@ void load_data(const char * fn)
 	for (int i = 0; i < datalen / dimensions; i++)
 	{
 		for (int j = 0; j < dimensions; j++)
-			tp[j] = (unsigned char)((pSampleData[dimensions * i * channels + j] + 1.0) * 127); //rand();
+			tp[j] = (unsigned char)((sampledata[dimensions * i * channels + j] + 1.0) * 127);
 		insert_chunk(tp);
 	}
-	//printf("%d chunks (%d max)\n", chunks, datalen / dimensions);
 }
 
 void split_group(int g, int d)
@@ -211,50 +219,15 @@ void average_groups()
 	// Calculate average chunk
 	for (int g = 0; g < groups; g++)
 	{
-		//printf("(");
 		for (int d = 0; d < dimensions; d++)
 		{
 			int total = 0;
 			for (int i = 0; i < group[g]; i++)
 				total += chunkdata[index[groupofs[g] + i] * dimensions + d];
 			dictionary[g * dimensions + d] = total / group[g];
-			//printf("%d ", dictionary[g * dimensions + d]);
-		}
-		//printf(") ");
-	}
-
-#ifdef USE_EXISTING_CHUNK
-	// Find closest chunk from original data and use that instead of average
-	for (int g = 0; g < groups; g++)
-	{
-		int idx = 0;
-		float distance = dist(dictionary + g * dimensions, chunkdata);
-		for (int i = 0; i < chunks; i++)
-		{
-			float d = dist(dictionary + g * dimensions, chunkdata + i * dimensions);
-			if (d < distance)
-			{
-				distance = d;
-				idx = i;
-			}
-		}
-		memcpy(dictionary + g * dimensions, chunkdata + idx * dimensions, dimensions);
-	}
-#endif
-
-	/*
-	for (int g = 0; g < groups; g++)
-	{
-		int p = g % group[g]; // pick random item
-		for (int d = 0; d < dimensions; d++)
-		{
-			dictionary[g * dimensions + d] = chunkdata[index[groupofs[g] + p] * dimensions + d];
-			//printf("%d ", dictionary[g * dimensions + d]);
 		}
 	}
-	*/
 	
-
 	fwrite(dictionary, dimensions * 256, 1, outfile);
 }
 
@@ -277,20 +250,7 @@ void map_indices()
 		}
 		outdata[i] = idx;
 	}
-/*
-	for (int g = 0; g < groups; g++)
-	{
-		for (int i = 0; i < group[g]; i++)
-		{
-			outdata[index[groupofs[g] + i]] = g;
-		}
-	}
-*/
-/*
-	printf("\n\n---\n\n");
-	for (int i = 0; i < chunks; i++)
-		printf("%d ", outdata[i]);
-*/		
+
 	fwrite(outdata, chunks, 1, outfile);
 	fclose(outfile);
 }
@@ -318,49 +278,75 @@ void verify()
 		}
 	}
 	long long errsum = 0;	
+	long long err2sum = 0;
 	for (int i = 0; i < chunks * dimensions; i++)
 	{
-		errsum += abs(unpackeddata[i] - chunkdata[i]);
+		int d = abs(unpackeddata[i] - chunkdata[i]);
+		errsum += d;
+		err2sum += d * d;
 	}
-	printf("Absolute error: %d, average error: %3.3f\n", (int)errsum, errsum / (double)(chunks * dimensions));
+	printf("Absolute error:       %d\n"
+		   "Average error:        %3.3f\n"
+		   "Square error:         %d\n"
+		   "Average square error: %3.3f\n", 
+		(int)errsum, errsum / (double)(chunks * dimensions), 
+		(int)err2sum, err2sum / (double)(chunks * dimensions));
 }
 
-void save_data()
+void save_data(const char *fn)
 {
-	char temp[1024];
-	sprintf(temp, "%s.wav", outfilename);
 	drwav_data_format format;
-	format.container = drwav_container_riff;     // <-- drwav_container_riff = normal WAV files, drwav_container_w64 = Sony Wave64.
-	format.format = DR_WAVE_FORMAT_PCM;          // <-- Any of the DR_WAVE_FORMAT_* codes.
+	format.container = drwav_container_riff;
+	format.format = DR_WAVE_FORMAT_PCM;
 	format.channels = channels;
 	format.sampleRate = samplerate;
 	format.bitsPerSample = 8;
 	drwav wav;
-	drwav_init_file_write(&wav, temp, &format, NULL);
+	if (!drwav_init_file_write(&wav, fn, &format, NULL))
+	{
+		printf("Failed to open \"%s\" for writing\n", fn);
+		return;
+	}
 	drwav_write_pcm_frames(&wav, chunks * dimensions / channels, unpackeddata);
 	drwav_uninit(&wav);
 }
 
+enum optionIndex { UNKNOWN, HELP, SAMPLERATE, DIMENSIONS, MONO, WINDOW, SAVE };
+const option::Descriptor usage[] =
+{
+	{ UNKNOWN,		0, "", "",	option::Arg::None, "USAGE: encoder inputfilename outputfilename [options]\n\nOptions:"},
+	{ HELP,			0, "h", "help", option::Arg::None, "  --help\t Print usage and exit"},
+	{ SAMPLERATE,	0, "s", "samplerate", option::Arg::Optional, "  --samplerate sr\t Set target samplerate (default 8000)"},
+	{ DIMENSIONS,	0, "d", "dimensions", option::Arg::Optional, "  --dimensions dim\t Set number of dimensions (default 4)"},
+	{ MONO,			0, "m", "mono", option::Arg::None,			 "  --mono\t Mix to mono (default: use source)"},
+	{ WINDOW,		0, "w", "window", option::Arg::Optional,	 "  --window winsize\t Set window size in grains (default: infinite)"},
+	{ SAVE,         0, "s", "save", option::Arg::Optional,       "  --save debugfilename\t Save re-decompressed file (default: don't)"},
+	{ UNKNOWN,      0, "", "", option::Arg::None, "Example:\n  encoder dasboot.mp3 theshoe.sad -m --window=65536 -d 16"},
+	{ 0,0,0,0,0,0 }
+};
+
 int main(int parc, char** pars)
 {
 	printf("LFAC encoder by Jari Komppa 2021 http://iki.fi/sol\n");
-	if (parc < 2)
+
+	option::Stats stats(usage, parc - 1, pars + 1);
+	option::Option options[256], buffer[256];
+	option::Parser parse(usage, parc - 1, pars + 1, options, buffer);
+
+	if (parse.error() || parc < 3 || options[HELP])
 	{
-		printf("Usage: %s infilename [outfilename]\n", pars[0]);
+		option::printUsage(std::cout, usage);
 		return 0;
 	}
-	if (parc < 3)
-	{
-		sprintf(outfilename, "%s.sad", pars[1]);
-	}
-	else
-		sprintf(outfilename, "%s", pars[2]);
 
 	load_data(pars[1]);
+	resample();
+	prep_output(pars[2]);
 	reduce();
 	average_groups();
 	map_indices();
 	verify();
-	save_data();
+	if (options[SAVE] && options[SAVE].arg && strlen(options[SAVE].arg) > 0)
+		save_data(options[SAVE].arg);
 	return 0;
 }
