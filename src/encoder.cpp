@@ -8,7 +8,7 @@
 #include <iostream>
 #include "../external/optionparser.h"
 
-#define MAX_DIMENSIONS 16
+#define MAX_DIMENSIONS 64
 #define MAX_GROUPS 256
 unsigned char* chunkdata;
 unsigned char* outdata;
@@ -18,31 +18,18 @@ int groupofs[MAX_GROUPS];
 int groups = 1;
 int analysis[MAX_GROUPS * MAX_DIMENSIONS];
 int chunks = 0;
-int dimensions = 16;
-int datalen = 1024 * 8;
+int dimensions = 4;
+int datalen = 0;
 unsigned char dictionary[MAX_GROUPS * MAX_DIMENSIONS];
 unsigned char* unpackeddata;
 
-//#define ROTATE_CHUNKS // "it's a great idea. But it doesn't work."
 
+// It may seem a bit weird to store the data this way (as a linear
+// pass would work just as well), but this way we can do weird things
+// with chunks if we want to.
 void insert_chunk(unsigned char* p)
 {
-#ifndef ROTATE_CHUNKS	
 	memcpy(chunkdata + chunks * dimensions, p, dimensions);
-#else
-	int minval = *p;
-	int minidx = 0;
-	for (int i = 1; i < dimensions; i++)
-		if (minval > p[i])
-		{
-			minval = p[i];
-			minidx = i;
-		}
-
-	for (int i = 0; i < dimensions; i++)
-		chunkdata[chunks * dimensions + i] = p[(minidx + i) % dimensions];
-#endif
-
 	index[chunks] = chunks;
 	chunks++;
 }
@@ -68,12 +55,6 @@ void analyze_group(int g)
 	}
 	for (int i = 0; i < dimensions; i++)
 		analysis[g * dimensions + i] = maxval[i] - minval[i];
-	/*
-	printf("g %d (%d): ", g, group[g]);
-	for (int i = 0; i < dimensions; i++)
-		printf("%d ", analysis[g * dimensions + i]);
-	printf("\n");
-	*/
 }
 
 int find_largest()
@@ -133,7 +114,7 @@ void load_data(const char* fn)
 	}
 }
 
-void resample()
+void resample(int targetsamplerate, int mono)
 {
 }
 
@@ -339,8 +320,30 @@ int main(int parc, char** pars)
 		return 0;
 	}
 
+	if (options[DIMENSIONS] && options[DIMENSIONS].arg)
+	{
+		dimensions = atoi(options[DIMENSIONS].arg);
+		if (dimensions < 2 || dimensions > 64)
+		{
+			printf("Bad value for dimensions. Try something like 2 or 16.\n");
+			return 0;
+		}
+		if (dimensions > 16)
+		{
+			printf("Note: dimensions set quite high. Quality will likely be horrible.\n");
+		}
+	}
+
 	load_data(pars[1]);
-	resample();
+	int sr = 8000;
+	if (options[SAMPLERATE] && options[SAMPLERATE].arg)
+		sr = atoi(options[SAMPLERATE].arg);
+	if (sr < 1 || sr > 256000)
+	{
+		printf("Bad value for sample rate.\n");
+		return 0;
+	}
+	resample(sr, !!options[MONO]);
 	prep_output(pars[2]);
 	reduce();
 	average_groups();
