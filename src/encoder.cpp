@@ -233,29 +233,75 @@ void prep_output(const char*fn)
 
 	group[0] = datalen / dimensions; // first group contains all chunks
 }
+/*
+                      average   even      mean     median
+Absolute error:       131170   143773	 130353
+Average error:        3.143     3.445     3.124
+Square error:         770636   802109    758841
+Average square error: 18.468   19.222    18.185
+*/
 
-void split_group(int g, int d)
+enum {
+	CUT_MEDIAN,
+	CUT_AVERAGE,
+	CUT_MEAN,
+	CUT_EVEN
+};
+
+void split_group(int g, int d, int cut_type)
 {
 	//printf("Splitting group %3d, dimension %d, delta %3d (%d items)\n", g, d, analysis[g*dimensions+d], group[g]);
 	sort_group(g, d);
 	int total = 0;
+	int minval = 255, maxval = 0;
 	for (int i = 0; i < group[g]; i++)
 	{
 		total += chunkdata[index[groupofs[g] + i] * dimensions + d];		
+		if (chunkdata[index[groupofs[g] + i] * dimensions + d] > maxval) maxval = chunkdata[index[groupofs[g] + i] * dimensions + d];
+		if (chunkdata[index[groupofs[g] + i] * dimensions + d] < minval) minval = chunkdata[index[groupofs[g] + i] * dimensions + d];
 	}
 	if (total < 0)
 	{
 		printf("borked\n");
 		exit(0);
 	}
-	int split = total / 2;
-	total = 0;
 	int i = 0;
-	while (total < split)
+	if (cut_type == CUT_MEAN)
 	{
-		total += chunkdata[index[groupofs[g] + i] * dimensions + d];
-		i++;
+		// average cut
+		int midval = minval + (maxval - minval) / 2;
+		while (chunkdata[index[groupofs[g] + i] * dimensions + d] < midval) i++;
 	}
+	if (cut_type == CUT_AVERAGE)
+	{
+		int split = total / 2;
+		total = 0;
+		// median cut
+		while (total < split)
+		{
+			total += chunkdata[index[groupofs[g] + i] * dimensions + d];
+			i++;
+		}
+	}
+	if (cut_type == CUT_EVEN)
+	{
+		i = group[g] / 2; // halve space
+	}
+	if (cut_type == CUT_MEDIAN)
+	{
+		i = group[g] / 2;
+		int v = chunkdata[index[groupofs[g] + i] * dimensions + d];
+		while (i > 0 && v == chunkdata[index[groupofs[g] + i] * dimensions + d]) i--;
+		if (i == 0)
+		{
+			i = group[g] / 2;
+			v = chunkdata[index[groupofs[g] + i] * dimensions + d];
+			while (i < group[g] && v == chunkdata[index[groupofs[g] + i] * dimensions + d]) i++;
+			if (i == group[g])
+				i /= 2;
+		}
+	}
+
 	if (i == group[g])
 		i--; // avoid splitting to empty groups
 	group[groups] = group[g] - i;
@@ -318,7 +364,7 @@ void map_indices()
 	fclose(outfile);
 }
 
-void reduce()
+void reduce(int cut_type)
 {
 	printf("Compressing with %d dimensions at %dHz..\n", dimensions, samplerate);
 	analyze_group(0);
@@ -327,7 +373,7 @@ void reduce()
 		int t = find_largest();
 		int g = t / dimensions;
 		int d = t % dimensions;
-		split_group(g, d);
+		split_group(g, d, cut_type);
 	}
 }
 
@@ -420,19 +466,20 @@ void save_compare_data(const char* fn, int fast)
 	delete[] d.data_out;
 }
 
-enum optionIndex { UNKNOWN, HELP, SAMPLERATE, DIMENSIONS, MONO, WINDOW, SAVE, SAVESRC, SAVECMP, FASTRS };
+enum optionIndex { UNKNOWN, HELP, SAMPLERATE, DIMENSIONS, MONO, WINDOW, SAVE, SAVESRC, SAVECMP, FASTRS, CUTTYPE };
 const option::Descriptor usage[] =
 {
 	{ UNKNOWN,		0, "", "",	option::Arg::None,				 "USAGE: encoder inputfilename outputfilename [options]\n\nOptions:"},
 	{ HELP,			0, "h", "help", option::Arg::None,			 " -h --help\t Print usage and exit"},
-	{ SAMPLERATE,	0, "r", "samplerate", option::Arg::Optional, " -r --samplerate sr\t Set target samplerate (default: use source)"},
-	{ DIMENSIONS,	0, "d", "dimensions", option::Arg::Optional, " -d --dimensions dim\t Set number of dimensions (default 4)"},
+	{ SAMPLERATE,	0, "r", "samplerate", option::Arg::Optional, " -r --samplerate=sr\t Set target samplerate (default: use source)"},
+	{ DIMENSIONS,	0, "d", "dimensions", option::Arg::Optional, " -d --dimensions=dim\t Set number of dimensions (default 4)"},
 	{ MONO,			0, "m", "mono", option::Arg::None,			 " -m --mono\t Mix to mono (default: use source)"},
-	{ WINDOW,		0, "w", "window", option::Arg::Optional,	 " -w --window winsize\t Set window size in grains (default: infinite)"},
-	{ SAVE,         0, "s", "saveout", option::Arg::Optional,    " -s --saveout filename\t Save re-decompressed file (default: don't)"},
-	{ SAVESRC,      0, "o", "savesrc", option::Arg::Optional,    " -o --savesrc filename\t Save raw soure data (after resampling) (default: don't)"},
-	{ SAVECMP,      0, "c", "savecmp", option::Arg::Optional,    " -c --savecmp filename\t Save size-comparable low-freq wav (default: don't)"},
+	{ WINDOW,		0, "w", "window", option::Arg::Optional,	 " -w --window=winsize\t Set window size in grains (default: infinite)"},
+	{ SAVE,         0, "s", "saveout", option::Arg::Optional,    " -s --saveout=filename\t Save re-decompressed file (default: don't)"},
+	{ SAVESRC,      0, "o", "savesrc", option::Arg::Optional,    " -o --savesrc=filename\t Save raw soure data (after resampling) (default: don't)"},
+	{ SAVECMP,      0, "c", "savecmp", option::Arg::Optional,    " -c --savecmp=filename\t Save size-comparable low-freq wav (default: don't)"},
 	{ FASTRS,       0, "f", "fastresample", option::Arg::None,   " -f --fastresample\t Use fast resampler (default: SINC_BEST)"},
+	{ CUTTYPE,		0, "x", "cuttype", option::Arg::Optional,    " -x --cuttype=type\t Subspace cut type: even, mean, average, median. (default: median)"},
 	{ UNKNOWN,      0, "", "", option::Arg::None,				 "Example:\n  encoder dasboot.mp3 theshoe.sad -m --window=65536 -d 16"},
 	{ 0,0,0,0,0,0 }
 };
@@ -442,8 +489,17 @@ int main(int parc, char** pars)
 	printf("LFAC encoder by Jari Komppa 2021 http://iki.fi/sol\n");
 
 	option::Stats stats(usage, parc - 1, pars + 1);
+	assert(stats.buffer_max < 16 && stats.options_max < 16);
 	option::Option options[16], buffer[16];
 	option::Parser parse(true, usage, parc - 1, pars + 1, options, buffer);
+
+	if (options[UNKNOWN])
+	{
+		for (option::Option* opt = options[UNKNOWN]; opt; opt = opt->next())
+			printf("Unknown option: %s\n", opt->name);
+		printf("Run without parameters for help.\n");
+		exit(0);
+	}
 
 	if (parse.error() || parc < 3 || options[HELP] || parse.nonOptionsCount() != 2)
 	{
@@ -474,6 +530,20 @@ int main(int parc, char** pars)
 		printf("Bad value for sample rate.\n");
 		return 0;
 	}	
+
+	int cut_type = CUT_MEDIAN;
+	if (options[CUTTYPE] && options[CUTTYPE].arg)
+	{
+		if (_stricmp(options[CUTTYPE].arg, "even")) cut_type = CUT_EVEN; else
+		if (_stricmp(options[CUTTYPE].arg, "average")) cut_type = CUT_AVERAGE; else
+		if (_stricmp(options[CUTTYPE].arg, "median")) cut_type = CUT_MEDIAN; else
+		if (_stricmp(options[CUTTYPE].arg, "mean")) cut_type = CUT_MEAN; else
+		{
+			printf("Unknown cut type: %s\n", options[CUTTYPE].arg);
+			exit(0);
+		}
+	}
+
 	resample(sr, !!options[MONO], !!options[FASTRS]);
 
 	if (options[SAVESRC] && options[SAVESRC].arg && strlen(options[SAVESRC].arg) > 0)
@@ -483,7 +553,7 @@ int main(int parc, char** pars)
 		save_compare_data(options[SAVECMP].arg, !!options[FASTRS]);
 
 	prep_output(parse.nonOption(1));
-	reduce();
+	reduce(cut_type);
 	average_groups();
 	map_indices();
 	verify();
