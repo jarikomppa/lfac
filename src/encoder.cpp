@@ -7,6 +7,7 @@
 #include "../external/dr_wav.h"
 #include <iostream>
 #include "../external/optionparser.h"
+#include "../external/libsamplerate/samplerate.h"
 
 #define MAX_DIMENSIONS 64
 #define MAX_GROUPS 256
@@ -116,6 +117,44 @@ void load_data(const char* fn)
 
 void resample(int targetsamplerate, int mono)
 {
+	if (mono && channels != 1)
+	{
+		printf("Mixing %d channels to mono..\n", channels);
+		// Mix down to mono by adding all channels together.
+		float* t = new float[datalen / channels];
+		for (unsigned int i = 0; i < (datalen / channels); i++)
+		{
+			t[i] = 0;
+			for (unsigned int j = 0; j < channels; j++)
+				t[i] += sampledata[i * channels + j];
+		}
+		delete[] sampledata;
+		sampledata = t;
+		datalen /= channels;
+		channels = 1;
+	}
+
+	if (targetsamplerate != samplerate)
+	{
+		printf("Resampling from %d to %d (libsamplerate SINC_BEST_QUALITY)..\n", samplerate, targetsamplerate);
+		SRC_DATA d;
+		d.data_in = sampledata;
+		d.input_frames = datalen / channels;
+		d.src_ratio = targetsamplerate / (float)samplerate;
+		d.output_frames = (int)((datalen / channels) * d.src_ratio);
+		d.data_out = new float[d.output_frames];
+		
+		if (src_simple(&d, SRC_SINC_BEST_QUALITY, channels))
+		{
+			printf("Resampling failed.\n");
+			exit(0);
+		}
+
+		delete[] sampledata;
+		sampledata = d.data_out;
+		datalen = d.output_frames_gen * channels;
+		samplerate = targetsamplerate;
+	}
 }
 
 void prep_output(const char*fn)
@@ -238,6 +277,7 @@ void map_indices()
 
 void reduce()
 {
+	printf("Compressing..\n");
 	analyze_group(0);
 	while (groups < MAX_GROUPS)
 	{
@@ -295,14 +335,14 @@ void save_data(const char *fn)
 enum optionIndex { UNKNOWN, HELP, SAMPLERATE, DIMENSIONS, MONO, WINDOW, SAVE };
 const option::Descriptor usage[] =
 {
-	{ UNKNOWN,		0, "", "",	option::Arg::None, "USAGE: encoder inputfilename outputfilename [options]\n\nOptions:"},
-	{ HELP,			0, "h", "help", option::Arg::None, "  --help\t Print usage and exit"},
+	{ UNKNOWN,		0, "", "",	option::Arg::None,				 "USAGE: encoder inputfilename outputfilename [options]\n\nOptions:"},
+	{ HELP,			0, "h", "help", option::Arg::None,			 "  --help\t Print usage and exit"},
 	{ SAMPLERATE,	0, "s", "samplerate", option::Arg::Optional, "  --samplerate sr\t Set target samplerate (default 8000)"},
 	{ DIMENSIONS,	0, "d", "dimensions", option::Arg::Optional, "  --dimensions dim\t Set number of dimensions (default 4)"},
 	{ MONO,			0, "m", "mono", option::Arg::None,			 "  --mono\t Mix to mono (default: use source)"},
 	{ WINDOW,		0, "w", "window", option::Arg::Optional,	 "  --window winsize\t Set window size in grains (default: infinite)"},
 	{ SAVE,         0, "s", "save", option::Arg::Optional,       "  --save debugfilename\t Save re-decompressed file (default: don't)"},
-	{ UNKNOWN,      0, "", "", option::Arg::None, "Example:\n  encoder dasboot.mp3 theshoe.sad -m --window=65536 -d 16"},
+	{ UNKNOWN,      0, "", "", option::Arg::None,				 "Example:\n  encoder dasboot.mp3 theshoe.sad -m --window=65536 -d 16"},
 	{ 0,0,0,0,0,0 }
 };
 
@@ -311,10 +351,10 @@ int main(int parc, char** pars)
 	printf("LFAC encoder by Jari Komppa 2021 http://iki.fi/sol\n");
 
 	option::Stats stats(usage, parc - 1, pars + 1);
-	option::Option options[256], buffer[256];
-	option::Parser parse(usage, parc - 1, pars + 1, options, buffer);
+	option::Option options[16], buffer[16];
+	option::Parser parse(true, usage, parc - 1, pars + 1, options, buffer);
 
-	if (parse.error() || parc < 3 || options[HELP])
+	if (parse.error() || parc < 3 || options[HELP] || parse.nonOptionsCount() != 2)
 	{
 		option::printUsage(std::cout, usage);
 		return 0;
@@ -334,7 +374,7 @@ int main(int parc, char** pars)
 		}
 	}
 
-	load_data(pars[1]);
+	load_data(parse.nonOption(0));
 	int sr = 8000;
 	if (options[SAMPLERATE] && options[SAMPLERATE].arg)
 		sr = atoi(options[SAMPLERATE].arg);
@@ -344,7 +384,7 @@ int main(int parc, char** pars)
 		return 0;
 	}
 	resample(sr, !!options[MONO]);
-	prep_output(pars[2]);
+	prep_output(parse.nonOption(1));
 	reduce();
 	average_groups();
 	map_indices();

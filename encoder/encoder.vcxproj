@@ -139,6 +139,10 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\external\libsamplerate\samplerate.c" />
+    <ClCompile Include="..\external\libsamplerate\src_linear.c" />
+    <ClCompile Include="..\external\libsamplerate\src_sinc.c" />
+    <ClCompile Include="..\external\libsamplerate\src_zoh.c" />
     <ClCompile Include="..\src\encoder.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
