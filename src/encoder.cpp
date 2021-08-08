@@ -233,13 +233,6 @@ void prep_output(const char*fn)
 
 	group[0] = datalen / dimensions; // first group contains all chunks
 }
-/*
-                      average   even      mean     median
-Absolute error:       131170   143773	 130353
-Average error:        3.143     3.445     3.124
-Square error:         770636   802109    758841
-Average square error: 18.468   19.222    18.185
-*/
 
 enum {
 	CUT_MEDIAN,
@@ -337,29 +330,60 @@ void average_groups()
 		}
 	}
 	
-	fwrite(dictionary, dimensions * 256, 1, outfile);
 }
 
-void map_indices()
+void map_indices(int maxiter)
 {
 	outdata = new unsigned char[chunks];
-	for (int i = 0; i < chunks; i++)
+	int changed = 1;
+	int timeout = 0;
+	while (changed && timeout < maxiter)
 	{
-		int idx = 0;
-		float distance = dist(dictionary, chunkdata + i * dimensions);
-
-		for (int g = 1; g < groups; g++)
+		timeout++;
+		changed = 0;
+		for (int i = 0; i < chunks; i++)
 		{
-			float d = dist(dictionary + g * dimensions, chunkdata + i * dimensions);
-			if (d < distance)
+			int idx = 0;
+			float distance = dist(dictionary, chunkdata + i * dimensions);
+
+			for (int g = 1; g < groups; g++)
 			{
-				distance = d;
-				idx = g;
+				float d = dist(dictionary + g * dimensions, chunkdata + i * dimensions);
+				if (d < distance)
+				{
+					distance = d;
+					idx = g;
+				}
+			}
+			if (outdata[i] != idx)
+			{
+				outdata[i] = idx;
+				changed = 1;
 			}
 		}
-		outdata[i] = idx;
-	}
 
+		// Recalculate averages
+		for (int d = 0; d < dimensions; d++)
+		{
+			for (int g = 0; g < 256; g++)
+			{
+				int total = 0;
+				int count = 0;
+				for (int i = 0; i < chunks; i++)
+				{
+					if (outdata[i] == g)
+					{
+						total += *(chunkdata + i * dimensions + d);
+						count++;
+					}
+				}
+				if (count != 0)
+					dictionary[g * dimensions + d] = total / count;
+			}
+		}
+	}
+	printf("%d iterations\n", timeout);
+	fwrite(dictionary, dimensions * 256, 1, outfile);
 	fwrite(outdata, chunks, 1, outfile);
 	fclose(outfile);
 }
@@ -466,7 +490,7 @@ void save_compare_data(const char* fn, int fast)
 	delete[] d.data_out;
 }
 
-enum optionIndex { UNKNOWN, HELP, SAMPLERATE, DIMENSIONS, MONO, WINDOW, SAVE, SAVESRC, SAVECMP, FASTRS, CUTTYPE };
+enum optionIndex { UNKNOWN, HELP, SAMPLERATE, DIMENSIONS, MONO, WINDOW, SAVE, SAVESRC, SAVECMP, FASTRS, CUTTYPE, MAXITER };
 const option::Descriptor usage[] =
 {
 	{ UNKNOWN,		0, "", "",	option::Arg::None,				 "USAGE: encoder inputfilename outputfilename [options]\n\nOptions:"},
@@ -480,6 +504,7 @@ const option::Descriptor usage[] =
 	{ SAVECMP,      0, "c", "savecmp", option::Arg::Optional,    " -c --savecmp=filename\t Save size-comparable low-freq wav (default: don't)"},
 	{ FASTRS,       0, "f", "fastresample", option::Arg::None,   " -f --fastresample\t Use fast resampler (default: SINC_BEST)"},
 	{ CUTTYPE,		0, "x", "cuttype", option::Arg::Optional,    " -x --cuttype=type\t Subspace cut type: even, mean, average, median. (default: median)"},
+	{ MAXITER,      0, "i", "maxiter", option::Arg::Optional,    " -i --maxiter=iters\t Maximum iterations for re-centering grains (default:10)"},
 	{ UNKNOWN,      0, "", "", option::Arg::None,				 "Example:\n  encoder dasboot.mp3 theshoe.sad -m --window=65536 -d 16"},
 	{ 0,0,0,0,0,0 }
 };
@@ -544,6 +569,15 @@ int main(int parc, char** pars)
 		}
 	}
 
+	int maxiters = 10;
+	if (options[MAXITER] && options[MAXITER].arg)
+		maxiters = atoi(options[MAXITER].arg);
+	if (maxiters < 1 || maxiters > 10000)
+	{
+		printf("Invalid number of max iterations specified\n");
+		exit(0);
+	}
+
 	resample(sr, !!options[MONO], !!options[FASTRS]);
 
 	if (options[SAVESRC] && options[SAVESRC].arg && strlen(options[SAVESRC].arg) > 0)
@@ -555,7 +589,7 @@ int main(int parc, char** pars)
 	prep_output(parse.nonOption(1));
 	reduce(cut_type);
 	average_groups();
-	map_indices();
+	map_indices(maxiters);
 	verify();
 	if (options[SAVE] && options[SAVE].arg && strlen(options[SAVE].arg) > 0)
 		save_data(options[SAVE].arg, unpackeddata);

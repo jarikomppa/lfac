@@ -83,6 +83,8 @@ And by surprisingly well, I mean I was totally surprised the result was somewhat
 
 To improve the quality, it's easy to see that since we split the subspaces with linear cuts, the grains in the "corners" of our subspaces may actually be closer to another subspace's center. Moving them to the closest subspace actually does improve the audio quality audibly.
 
+This changes the average grain position for each dictionary index, so we recalculate the average. This in turn means that the closest average grain may change, so we reiterate the process until the system stabilizes or we reach a maximum number of iterations.
+
 Another trick is to rotate the samples in a grain so that the smallest sample always comes first. This reduces the average error, but also totally wrecks the audio quality, so it's a great idea, it just doesn't work.
 
 ## File format
