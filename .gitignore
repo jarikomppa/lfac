@@ -2,3 +2,5 @@
 *.user
 .vs/
 Debug/
+Release/
+encoder/

@@ -403,6 +403,8 @@ void reduce(int cut_type)
 
 void verify()
 {
+	// decompress the data and calculate error compared to source.
+
 	unpackeddata = new unsigned char[datalen];
 	for (int i = 0; i < chunks; i++)
 	{
@@ -412,19 +414,14 @@ void verify()
 		}
 	}
 	long long errsum = 0;	
-	long long err2sum = 0;
 	for (int i = 0; i < chunks * dimensions; i++)
 	{
 		int d = abs(unpackeddata[i] - chunkdata[i]);
 		errsum += d;
-		err2sum += d * d;
 	}
-	printf("Absolute error:       %d\n"
-		   "Average error:        %3.3f\n"
-		   "Square error:         %d\n"
-		   "Average square error: %3.3f\n", 
-		(int)errsum, errsum / (double)(chunks * dimensions), 
-		(int)err2sum, err2sum / (double)(chunks * dimensions));
+	printf("Absolute error: %d\n"
+		   "Average error:  %3.3f\n", 
+		(int)errsum, errsum / (double)(chunks * dimensions));
 }
 
 void save_data(const char* fn, unsigned char*data)
@@ -499,8 +496,8 @@ const option::Descriptor usage[] =
 	{ DIMENSIONS,	0, "d", "dimensions", option::Arg::Optional, " -d --dimensions=dim\t Set number of dimensions (default 4)"},
 	{ MONO,			0, "m", "mono", option::Arg::None,			 " -m --mono\t Mix to mono (default: use source)"},
 	{ WINDOW,		0, "w", "window", option::Arg::Optional,	 " -w --window=winsize\t Set window size in grains (default: infinite)"},
-	{ SAVE,         0, "s", "saveout", option::Arg::Optional,    " -s --saveout=filename\t Save re-decompressed file (default: don't)"},
-	{ SAVESRC,      0, "o", "savesrc", option::Arg::Optional,    " -o --savesrc=filename\t Save raw soure data (after resampling) (default: don't)"},
+	{ SAVE,         0, "o", "saveout", option::Arg::Optional,    " -o --saveout=filename\t Save re-decompressed file (default: don't)"},
+	{ SAVESRC,      0, "s", "savesrc", option::Arg::Optional,    " -s --savesrc=filename\t Save raw soure data (after resampling) (default: don't)"},
 	{ SAVECMP,      0, "c", "savecmp", option::Arg::Optional,    " -c --savecmp=filename\t Save size-comparable low-freq wav (default: don't)"},
 	{ FASTRS,       0, "f", "fastresample", option::Arg::None,   " -f --fastresample\t Use fast resampler (default: SINC_BEST)"},
 	{ CUTTYPE,		0, "x", "cuttype", option::Arg::Optional,    " -x --cuttype=type\t Subspace cut type: even, mean, average, median. (default: median)"},
@@ -581,7 +578,10 @@ int main(int parc, char** pars)
 	resample(sr, !!options[MONO], !!options[FASTRS]);
 
 	if (options[SAVESRC] && options[SAVESRC].arg && strlen(options[SAVESRC].arg) > 0)
+	{
+		printf("Saving source data as \"%s\"\n", options[SAVESRC].arg);
 		save_data(options[SAVESRC].arg, chunkdata);
+	}
 
 	if (options[SAVECMP] && options[SAVECMP].arg && strlen(options[SAVECMP].arg) > 0)
 		save_compare_data(options[SAVECMP].arg, !!options[FASTRS]);
@@ -592,6 +592,9 @@ int main(int parc, char** pars)
 	map_indices(maxiters);
 	verify();
 	if (options[SAVE] && options[SAVE].arg && strlen(options[SAVE].arg) > 0)
+	{
+		printf("Saving uncompressed data as \"%s\"\n", options[SAVE].arg);
 		save_data(options[SAVE].arg, unpackeddata);
+	}
 	return 0;
 }
