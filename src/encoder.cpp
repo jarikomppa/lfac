@@ -115,7 +115,7 @@ void load_data(const char* fn)
 	}
 }
 
-void resample(int targetsamplerate, int mono)
+void resample(int targetsamplerate, int mono, int fast)
 {
 	if (mono && channels != 1)
 	{
@@ -136,7 +136,7 @@ void resample(int targetsamplerate, int mono)
 
 	if (targetsamplerate != samplerate)
 	{
-		printf("Resampling from %d to %d (libsamplerate SINC_BEST_QUALITY)..\n", samplerate, targetsamplerate);
+		printf("Resampling from %d to %d (libsamplerate %s)..\n", samplerate, targetsamplerate, fast?"SRC_SINC_FASTEST":"SINC_BEST_QUALITY");
 		SRC_DATA d;
 		d.data_in = sampledata;
 		d.input_frames = datalen / channels;
@@ -144,7 +144,7 @@ void resample(int targetsamplerate, int mono)
 		d.output_frames = (int)((datalen / channels) * d.src_ratio);
 		d.data_out = new float[d.output_frames];
 		
-		if (src_simple(&d, SRC_SINC_BEST_QUALITY, channels))
+		if (src_simple(&d, fast?SRC_SINC_FASTEST:SRC_SINC_BEST_QUALITY, channels))
 		{
 			printf("Resampling failed.\n");
 			exit(0);
@@ -332,16 +332,17 @@ void save_data(const char *fn)
 	drwav_uninit(&wav);
 }
 
-enum optionIndex { UNKNOWN, HELP, SAMPLERATE, DIMENSIONS, MONO, WINDOW, SAVE };
+enum optionIndex { UNKNOWN, HELP, SAMPLERATE, DIMENSIONS, MONO, WINDOW, SAVE, FASTRS };
 const option::Descriptor usage[] =
 {
 	{ UNKNOWN,		0, "", "",	option::Arg::None,				 "USAGE: encoder inputfilename outputfilename [options]\n\nOptions:"},
 	{ HELP,			0, "h", "help", option::Arg::None,			 "  --help\t Print usage and exit"},
-	{ SAMPLERATE,	0, "s", "samplerate", option::Arg::Optional, "  --samplerate sr\t Set target samplerate (default 8000)"},
+	{ SAMPLERATE,	0, "s", "samplerate", option::Arg::Optional, "  --samplerate sr\t Set target samplerate (default: use source)"},
 	{ DIMENSIONS,	0, "d", "dimensions", option::Arg::Optional, "  --dimensions dim\t Set number of dimensions (default 4)"},
 	{ MONO,			0, "m", "mono", option::Arg::None,			 "  --mono\t Mix to mono (default: use source)"},
 	{ WINDOW,		0, "w", "window", option::Arg::Optional,	 "  --window winsize\t Set window size in grains (default: infinite)"},
 	{ SAVE,         0, "s", "save", option::Arg::Optional,       "  --save debugfilename\t Save re-decompressed file (default: don't)"},
+	{ FASTRS,       0, "f", "fastresample", option::Arg::None,   "  --fastresample\t Use fast resampler (default: SINC_BEST)"},
 	{ UNKNOWN,      0, "", "", option::Arg::None,				 "Example:\n  encoder dasboot.mp3 theshoe.sad -m --window=65536 -d 16"},
 	{ 0,0,0,0,0,0 }
 };
@@ -375,7 +376,7 @@ int main(int parc, char** pars)
 	}
 
 	load_data(parse.nonOption(0));
-	int sr = 8000;
+	int sr = samplerate;
 	if (options[SAMPLERATE] && options[SAMPLERATE].arg)
 		sr = atoi(options[SAMPLERATE].arg);
 	if (sr < 1 || sr > 256000)
@@ -383,7 +384,7 @@ int main(int parc, char** pars)
 		printf("Bad value for sample rate.\n");
 		return 0;
 	}
-	resample(sr, !!options[MONO]);
+	resample(sr, !!options[MONO], !!options[FASTRS]);
 	prep_output(parse.nonOption(1));
 	reduce();
 	average_groups();
