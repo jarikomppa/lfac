@@ -280,7 +280,7 @@ void map_indices()
 
 void reduce()
 {
-	printf("Compressing..\n");
+	printf("Compressing with %d dimensions at %dHz..\n", dimensions, samplerate);
 	analyze_group(0);
 	while (groups < MAX_GROUPS)
 	{
@@ -335,17 +335,63 @@ void save_data(const char* fn, unsigned char*data)
 	drwav_uninit(&wav);
 }
 
-enum optionIndex { UNKNOWN, HELP, SAMPLERATE, DIMENSIONS, MONO, WINDOW, SAVE, SAVESRC, FASTRS };
+void save_compare_data(const char* fn, int fast)
+{
+	int windowing_extra_data = window ? (datalen / (dimensions * window)) * 256 * dimensions : 0;
+	int compress_size = datalen / dimensions + 256 * dimensions + windowing_extra_data;
+	float compressionratio = compress_size / (float)datalen;
+	int targetsamplerate = (int)(samplerate * compressionratio);
+	
+	printf("Saving compare file \"%s\" at sample rate %dHz\n", fn, targetsamplerate);
+
+	SRC_DATA d;
+	d.data_in = sampledata;
+	d.input_frames = datalen / channels;
+	d.src_ratio = targetsamplerate / (float)samplerate;
+	d.output_frames = (int)((datalen / channels) * d.src_ratio);
+	d.data_out = new float[d.output_frames];
+
+	if (src_simple(&d, fast ? SRC_SINC_FASTEST : SRC_SINC_BEST_QUALITY, channels))
+	{
+		printf("Resampling failed.\n");
+		exit(0);
+	}
+
+	unsigned char* data = new unsigned char[datalen];
+	for (int i = 0; i < datalen; i++)
+		data[i] = (unsigned char)((d.data_out[i] * 0.5 + 0.5) * 255);
+
+	drwav_data_format format;
+	format.container = drwav_container_riff;
+	format.format = DR_WAVE_FORMAT_PCM;
+	format.channels = channels;
+	format.sampleRate = targetsamplerate;
+	format.bitsPerSample = 8;
+	drwav wav;
+	if (!drwav_init_file_write(&wav, fn, &format, NULL))
+	{
+		printf("Failed to open \"%s\" for writing\n", fn);
+		return;
+	}
+	drwav_write_pcm_frames(&wav, d.output_frames_gen * channels, data);
+	drwav_uninit(&wav);
+
+	delete[] data;
+	delete[] d.data_out;
+}
+
+enum optionIndex { UNKNOWN, HELP, SAMPLERATE, DIMENSIONS, MONO, WINDOW, SAVE, SAVESRC, SAVECMP, FASTRS };
 const option::Descriptor usage[] =
 {
 	{ UNKNOWN,		0, "", "",	option::Arg::None,				 "USAGE: encoder inputfilename outputfilename [options]\n\nOptions:"},
 	{ HELP,			0, "h", "help", option::Arg::None,			 " -h --help\t Print usage and exit"},
-	{ SAMPLERATE,	0, "s", "samplerate", option::Arg::Optional, " -s --samplerate sr\t Set target samplerate (default: use source)"},
+	{ SAMPLERATE,	0, "r", "samplerate", option::Arg::Optional, " -r --samplerate sr\t Set target samplerate (default: use source)"},
 	{ DIMENSIONS,	0, "d", "dimensions", option::Arg::Optional, " -d --dimensions dim\t Set number of dimensions (default 4)"},
 	{ MONO,			0, "m", "mono", option::Arg::None,			 " -m --mono\t Mix to mono (default: use source)"},
 	{ WINDOW,		0, "w", "window", option::Arg::Optional,	 " -w --window winsize\t Set window size in grains (default: infinite)"},
-	{ SAVE,         0, "r", "saveout", option::Arg::Optional,    " -r --saveout filename\t Save re-decompressed file (default: don't)"},
-	{ SAVESRC,      0, "b", "savesrc", option::Arg::Optional,    " -b --savesrc filename\t Save raw soure data (after resampling) (default: don't)"},
+	{ SAVE,         0, "s", "saveout", option::Arg::Optional,    " -s --saveout filename\t Save re-decompressed file (default: don't)"},
+	{ SAVESRC,      0, "o", "savesrc", option::Arg::Optional,    " -o --savesrc filename\t Save raw soure data (after resampling) (default: don't)"},
+	{ SAVECMP,      0, "c", "savecmp", option::Arg::Optional,    " -c --savecmp filename\t Save size-comparable low-freq wav (default: don't)"},
 	{ FASTRS,       0, "f", "fastresample", option::Arg::None,   " -f --fastresample\t Use fast resampler (default: SINC_BEST)"},
 	{ UNKNOWN,      0, "", "", option::Arg::None,				 "Example:\n  encoder dasboot.mp3 theshoe.sad -m --window=65536 -d 16"},
 	{ 0,0,0,0,0,0 }
@@ -387,10 +433,15 @@ int main(int parc, char** pars)
 	{
 		printf("Bad value for sample rate.\n");
 		return 0;
-	}
+	}	
 	resample(sr, !!options[MONO], !!options[FASTRS]);
-	if (options[SAVESRC] && options[SAVESRC].arg && strlen(options[SAVE].arg) > 0)
+
+	if (options[SAVESRC] && options[SAVESRC].arg && strlen(options[SAVESRC].arg) > 0)
 		save_data(options[SAVESRC].arg, chunkdata);
+
+	if (options[SAVECMP] && options[SAVECMP].arg && strlen(options[SAVECMP].arg) > 0)
+		save_compare_data(options[SAVECMP].arg, !!options[FASTRS]);
+
 	prep_output(parse.nonOption(1));
 	reduce();
 	average_groups();
