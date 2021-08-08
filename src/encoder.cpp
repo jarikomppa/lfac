@@ -5,6 +5,11 @@
 #include <math.h>
 #define DR_WAV_IMPLEMENTATION
 #include "../external/dr_wav.h"
+#define DR_MP3_IMPLEMENTATION
+#include "../external/dr_mp3.h"
+#define DR_FLAC_IMPLEMENTATION
+#include "../external/dr_flac.h"
+#include "../external/stb_vorbis.c"
 #include <iostream>
 #include "../external/optionparser.h"
 #include "../external/libsamplerate/samplerate.h"
@@ -104,12 +109,47 @@ float* sampledata = NULL;
 
 void load_data(const char* fn)
 {
+	// Let's assume wav.
 	drwav_uint64 totalPCMFrameCount;
 	sampledata = drwav_open_file_and_read_pcm_frames_f32(fn, &channels, &samplerate, &totalPCMFrameCount, NULL);
 	datalen = ((int)totalPCMFrameCount / dimensions) * dimensions; // rounded to "dimensions"
 
 	if (!sampledata)
 	{
+		// not a wav, what about mp3?
+		drmp3_config conf;
+		sampledata = drmp3_open_file_and_read_pcm_frames_f32(fn, &conf, &totalPCMFrameCount, NULL);
+		if (sampledata)
+		{
+			samplerate = conf.sampleRate;
+			channels = conf.channels;
+		}
+	}
+
+	if (!sampledata)
+	{
+		// flac, maybe?
+		sampledata = drflac_open_file_and_read_pcm_frames_f32(fn, &channels, &samplerate, &totalPCMFrameCount, NULL);
+	}
+
+	if (!sampledata)
+	{
+		// it must be an ogg then.
+		short* output;
+		int frames = stb_vorbis_decode_filename(fn, (int*)&channels, (int*)&samplerate, &output);	
+		if (frames > 0)
+		{
+			datalen = frames * channels;
+			sampledata = new float[datalen];
+			for (int i = 0; i < datalen; i++)
+				sampledata[i] = output[i] * (1.0f / 0x7fff);
+			free(output);
+		}
+	}
+
+	if (!sampledata)
+	{
+		// okay, keep your secrets.
 		printf("Failed to load data\n");
 		exit(0);
 	}
