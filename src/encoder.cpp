@@ -155,6 +155,16 @@ void resample(int targetsamplerate, int mono, int fast)
 		datalen = d.output_frames_gen * channels;
 		samplerate = targetsamplerate;
 	}
+
+	chunkdata = new unsigned char[datalen];
+	index = new unsigned int[datalen / dimensions];
+	unsigned char tp[MAX_DIMENSIONS];
+	for (int i = 0; i < datalen / dimensions; i++)
+	{
+		for (int j = 0; j < dimensions; j++)
+			tp[j] = (unsigned char)((sampledata[dimensions * i * channels + j] + 1.0) * 127);
+		insert_chunk(tp);
+	}
 }
 
 void prep_output(const char*fn)
@@ -177,18 +187,11 @@ void prep_output(const char*fn)
 		group[i] = 0;
 		groupofs[i] = 0;
 	}
+
 	for (int i = 0; i < MAX_GROUPS * MAX_DIMENSIONS; i++)
 		analysis[i] = -1;
+
 	group[0] = datalen / dimensions; // first group contains all chunks
-	chunkdata = new unsigned char[datalen];
-	index = new unsigned int[datalen / dimensions];
-	unsigned char tp[MAX_DIMENSIONS];
-	for (int i = 0; i < datalen / dimensions; i++)
-	{
-		for (int j = 0; j < dimensions; j++)
-			tp[j] = (unsigned char)((sampledata[dimensions * i * channels + j] + 1.0) * 127);
-		insert_chunk(tp);
-	}
 }
 
 void split_group(int g, int d)
@@ -314,7 +317,7 @@ void verify()
 		(int)err2sum, err2sum / (double)(chunks * dimensions));
 }
 
-void save_data(const char *fn)
+void save_data(const char* fn, unsigned char*data)
 {
 	drwav_data_format format;
 	format.container = drwav_container_riff;
@@ -328,21 +331,22 @@ void save_data(const char *fn)
 		printf("Failed to open \"%s\" for writing\n", fn);
 		return;
 	}
-	drwav_write_pcm_frames(&wav, chunks * dimensions / channels, unpackeddata);
+	drwav_write_pcm_frames(&wav, chunks * dimensions / channels, data);
 	drwav_uninit(&wav);
 }
 
-enum optionIndex { UNKNOWN, HELP, SAMPLERATE, DIMENSIONS, MONO, WINDOW, SAVE, FASTRS };
+enum optionIndex { UNKNOWN, HELP, SAMPLERATE, DIMENSIONS, MONO, WINDOW, SAVE, SAVESRC, FASTRS };
 const option::Descriptor usage[] =
 {
 	{ UNKNOWN,		0, "", "",	option::Arg::None,				 "USAGE: encoder inputfilename outputfilename [options]\n\nOptions:"},
-	{ HELP,			0, "h", "help", option::Arg::None,			 "  --help\t Print usage and exit"},
-	{ SAMPLERATE,	0, "s", "samplerate", option::Arg::Optional, "  --samplerate sr\t Set target samplerate (default: use source)"},
-	{ DIMENSIONS,	0, "d", "dimensions", option::Arg::Optional, "  --dimensions dim\t Set number of dimensions (default 4)"},
-	{ MONO,			0, "m", "mono", option::Arg::None,			 "  --mono\t Mix to mono (default: use source)"},
-	{ WINDOW,		0, "w", "window", option::Arg::Optional,	 "  --window winsize\t Set window size in grains (default: infinite)"},
-	{ SAVE,         0, "s", "save", option::Arg::Optional,       "  --save debugfilename\t Save re-decompressed file (default: don't)"},
-	{ FASTRS,       0, "f", "fastresample", option::Arg::None,   "  --fastresample\t Use fast resampler (default: SINC_BEST)"},
+	{ HELP,			0, "h", "help", option::Arg::None,			 " -h --help\t Print usage and exit"},
+	{ SAMPLERATE,	0, "s", "samplerate", option::Arg::Optional, " -s --samplerate sr\t Set target samplerate (default: use source)"},
+	{ DIMENSIONS,	0, "d", "dimensions", option::Arg::Optional, " -d --dimensions dim\t Set number of dimensions (default 4)"},
+	{ MONO,			0, "m", "mono", option::Arg::None,			 " -m --mono\t Mix to mono (default: use source)"},
+	{ WINDOW,		0, "w", "window", option::Arg::Optional,	 " -w --window winsize\t Set window size in grains (default: infinite)"},
+	{ SAVE,         0, "r", "saveout", option::Arg::Optional,    " -r --saveout filename\t Save re-decompressed file (default: don't)"},
+	{ SAVESRC,      0, "b", "savesrc", option::Arg::Optional,    " -b --savesrc filename\t Save raw soure data (after resampling) (default: don't)"},
+	{ FASTRS,       0, "f", "fastresample", option::Arg::None,   " -f --fastresample\t Use fast resampler (default: SINC_BEST)"},
 	{ UNKNOWN,      0, "", "", option::Arg::None,				 "Example:\n  encoder dasboot.mp3 theshoe.sad -m --window=65536 -d 16"},
 	{ 0,0,0,0,0,0 }
 };
@@ -385,12 +389,14 @@ int main(int parc, char** pars)
 		return 0;
 	}
 	resample(sr, !!options[MONO], !!options[FASTRS]);
+	if (options[SAVESRC] && options[SAVESRC].arg && strlen(options[SAVE].arg) > 0)
+		save_data(options[SAVESRC].arg, chunkdata);
 	prep_output(parse.nonOption(1));
 	reduce();
 	average_groups();
 	map_indices();
 	verify();
 	if (options[SAVE] && options[SAVE].arg && strlen(options[SAVE].arg) > 0)
-		save_data(options[SAVE].arg);
+		save_data(options[SAVE].arg, unpackeddata);
 	return 0;
 }
