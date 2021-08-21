@@ -107,3 +107,8 @@ LFAC files have the extension .sad, and have the following format (all over 1 by
 |*|*|Indices for second window
 |||etc|
 
+## VQ
+
+It has been pointed out to me that what I have re-invented here is called vector quantization or VQ. The VQ described in wikipedia appears to differ primarily by finding the initial center point using multidimensional voronoi graph instead of the direct subdivision I'm using.
+
+And of course the terminology is different (dictionary / codebook, etc).
