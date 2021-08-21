@@ -207,7 +207,7 @@ void resample(int targetsamplerate, int mono, int fast)
 	}
 }
 
-void prep_output(const char*fn)
+void prep_output(const char* fn)
 {
 	outfile = fopen(fn, "wb");
 	int tag = 'CAFL'; // gets reversed
@@ -221,7 +221,10 @@ void prep_output(const char*fn)
 	fwrite(&datalen, 1, 4, outfile);
 	int reserved = 0;
 	fwrite(&reserved, 1, 4, outfile);
+}
 
+void init_encode()
+{
 	for (int i = 0; i < MAX_GROUPS; i++)
 	{
 		group[i] = 0;
@@ -385,6 +388,10 @@ void map_indices(int maxiter)
 	printf("%d iterations\n", timeout);
 	fwrite(dictionary, dimensions * 256, 1, outfile);
 	fwrite(outdata, chunks, 1, outfile);
+}
+
+void finish()
+{
 	fclose(outfile);
 }
 
@@ -586,11 +593,21 @@ int main(int parc, char** pars)
 	if (options[SAVECMP] && options[SAVECMP].arg && strlen(options[SAVECMP].arg) > 0)
 		save_compare_data(options[SAVECMP].arg, !!options[FASTRS]);
 
+	int total_left = datalen;
 	prep_output(parse.nonOption(1));
-	reduce(cut_type);
-	average_groups();
-	map_indices(maxiters);
-	verify();
+	while (total_left > 0)
+	{
+		init_encode();
+		reduce(cut_type);
+		average_groups();
+		map_indices(maxiters);
+		verify();
+		if (window > total_left)
+			total_left -= window;
+		else
+			total_left = 0;
+	}
+	finish();
 	if (options[SAVE] && options[SAVE].arg && strlen(options[SAVE].arg) > 0)
 	{
 		printf("Saving uncompressed data as \"%s\"\n", options[SAVE].arg);
