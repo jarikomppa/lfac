@@ -16,7 +16,7 @@
 
 #define MAX_DIMENSIONS 64
 #define MAX_GROUPS 256
-unsigned char* chunkdata;
+unsigned char* gChunkdata;
 unsigned char* outdata;
 unsigned int* index;
 int group[MAX_GROUPS];
@@ -29,19 +29,21 @@ int datalen = 0;
 unsigned char dictionary[MAX_GROUPS * MAX_DIMENSIONS];
 unsigned char* unpackeddata;
 
+int window_offset = 0;
+int window_size = 0;
 
 // It may seem a bit weird to store the data this way (as a linear
 // pass would work just as well), but this way we can do weird things
 // with chunks if we want to.
 void insert_chunk(unsigned char* p)
 {
-	memcpy(chunkdata + chunks * dimensions, p, dimensions);
-	index[chunks] = chunks;
+	memcpy(gChunkdata + chunks * dimensions, p, dimensions);
 	chunks++;
 }
 
 void analyze_group(int g)
 {
+	unsigned char* chunkdata = gChunkdata + window_offset;
 	int minval[MAX_DIMENSIONS];
 	int maxval[MAX_DIMENSIONS];
 	for (int i = 0; i < dimensions; i++)
@@ -89,6 +91,7 @@ int sortdimension = 0;
 
 int cmpfunc(const void* a, const void* b)
 {
+	unsigned char* chunkdata = gChunkdata + window_offset;
 	int av = *(int*)a;
 	int bv = *(int*)b;
 	return (int)chunkdata[av * dimensions + sortdimension] - 
@@ -196,7 +199,7 @@ void resample(int targetsamplerate, int mono, int fast)
 		samplerate = targetsamplerate;
 	}
 
-	chunkdata = new unsigned char[datalen];
+	gChunkdata = new unsigned char[datalen];
 	index = new unsigned int[datalen / dimensions];
 	unsigned char tp[MAX_DIMENSIONS];
 	for (int i = 0; i < datalen / dimensions; i++)
@@ -231,10 +234,17 @@ void init_encode()
 		groupofs[i] = 0;
 	}
 
+	groups = 1;
+
+	chunks = window_size / dimensions;
+
+	for (int i = 0; i < chunks; i++)
+		index[i] = i;
+
 	for (int i = 0; i < MAX_GROUPS * MAX_DIMENSIONS; i++)
 		analysis[i] = -1;
 
-	group[0] = datalen / dimensions; // first group contains all chunks
+	group[0] = chunks; // first group contains all chunks
 }
 
 enum {
@@ -246,6 +256,7 @@ enum {
 
 void split_group(int g, int d, int cut_type)
 {
+	unsigned char* chunkdata = gChunkdata + window_offset;
 	//printf("Splitting group %3d, dimension %d, delta %3d (%d items)\n", g, d, analysis[g*dimensions+d], group[g]);
 	sort_group(g, d);
 	int total = 0;
@@ -300,6 +311,7 @@ void split_group(int g, int d, int cut_type)
 
 	if (i == group[g])
 		i--; // avoid splitting to empty groups
+	if (i < 1) return;
 	group[groups] = group[g] - i;
 	groupofs[groups] = groupofs[g] + i;
 	group[g] = i;
@@ -318,6 +330,7 @@ float dist(const unsigned char* a, const unsigned char* b)
 
 void average_groups()
 {
+	unsigned char* chunkdata = gChunkdata + window_offset;
 	for (int i = 0; i < groups * dimensions; i++)
 		dictionary[i] = 0;
 
@@ -337,11 +350,13 @@ void average_groups()
 
 void map_indices(int maxiter)
 {
+	unsigned char* chunkdata = gChunkdata + window_offset;
 	outdata = new unsigned char[chunks];
 	int changed = 1;
 	int timeout = 0;
 	while (changed && timeout < maxiter)
 	{
+		printf("%c\r", "\\-/|"[timeout % 4]);
 		timeout++;
 		changed = 0;
 		for (int i = 0; i < chunks; i++)
@@ -397,9 +412,10 @@ void finish()
 
 void reduce(int cut_type)
 {
-	printf("Compressing with %d dimensions at %dHz..\n", dimensions, samplerate);
+	printf("Compressing with %d dimensions at %dHz, window size %d..\n", dimensions, samplerate, window_size);
 	analyze_group(0);
-	while (groups < MAX_GROUPS)
+//	while (groups < MAX_GROUPS)
+	for (int i = 1; i < MAX_GROUPS; i++)
 	{
 		int t = find_largest();
 		int g = t / dimensions;
@@ -410,20 +426,19 @@ void reduce(int cut_type)
 
 void verify()
 {
+	unsigned char* chunkdata = gChunkdata + window_offset;
 	// decompress the data and calculate error compared to source.
-
-	unpackeddata = new unsigned char[datalen];
 	for (int i = 0; i < chunks; i++)
 	{
 		for (int j = 0; j < dimensions; j++)
 		{
-			unpackeddata[i * dimensions + j] = dictionary[outdata[i] * dimensions + j];
+			unpackeddata[i * dimensions + j + window_offset] = dictionary[outdata[i] * dimensions + j];
 		}
 	}
 	long long errsum = 0;	
 	for (int i = 0; i < chunks * dimensions; i++)
 	{
-		int d = abs(unpackeddata[i] - chunkdata[i]);
+		int d = abs(unpackeddata[i + window_offset] - chunkdata[i]);
 		errsum += d;
 	}
 	printf("Absolute error: %d\n"
@@ -550,7 +565,25 @@ int main(int parc, char** pars)
 		}
 	}
 
+	if (options[WINDOW] && options[WINDOW].arg)
+	{
+		window = atoi(options[WINDOW].arg);
+		if (window == 0)
+		{
+			// fine
+		}
+		else
+		if (window < dimensions * dimensions * 256 / (dimensions - 1))
+		{
+			printf("Given window size (%d) would cause resulting file to be bigger than original. (break even at %d)\n", window, dimensions * dimensions * 256 / (dimensions - 1));
+			return 0;
+		}
+	}
+
 	load_data(parse.nonOption(0));
+	if (window > datalen / dimensions)
+		window = datalen / dimensions;
+	unpackeddata = new unsigned char[datalen];
 	int sr = samplerate;
 	if (options[SAMPLERATE] && options[SAMPLERATE].arg)
 		sr = atoi(options[SAMPLERATE].arg);
@@ -587,23 +620,32 @@ int main(int parc, char** pars)
 	if (options[SAVESRC] && options[SAVESRC].arg && strlen(options[SAVESRC].arg) > 0)
 	{
 		printf("Saving source data as \"%s\"\n", options[SAVESRC].arg);
-		save_data(options[SAVESRC].arg, chunkdata);
+		save_data(options[SAVESRC].arg, gChunkdata);
 	}
 
 	if (options[SAVECMP] && options[SAVECMP].arg && strlen(options[SAVECMP].arg) > 0)
 		save_compare_data(options[SAVECMP].arg, !!options[FASTRS]);
 
-	int total_left = datalen;
+	unsigned int total_left = datalen;
 	prep_output(parse.nonOption(1));
 	while (total_left > 0)
 	{
+		printf("total left: %d\n", total_left);
+		if (total_left > window * dimensions)
+			window_size = window * dimensions;
+		else
+			window_size = total_left;
+		if (window == 0) window_size = datalen;
+
 		init_encode();
 		reduce(cut_type);
 		average_groups();
 		map_indices(maxiters);
 		verify();
-		if (window > total_left)
-			total_left -= window;
+		
+		window_offset += window_size;
+		if (window * dimensions < total_left)
+			total_left -= window * dimensions;
 		else
 			total_left = 0;
 	}
