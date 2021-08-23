@@ -348,14 +348,39 @@ void average_groups()
 	
 }
 
+float verify()
+{
+	unsigned char* chunkdata = gChunkdata + window_offset;
+	// decompress the data and calculate error compared to source.
+	for (int i = 0; i < chunks; i++)
+	{
+		for (int j = 0; j < dimensions; j++)
+		{
+			unpackeddata[i * dimensions + j + window_offset] = dictionary[outdata[i] * dimensions + j];
+		}
+	}
+	long long errsum = 0;
+	for (int i = 0; i < chunks * dimensions; i++)
+	{
+		int d = abs(unpackeddata[i + window_offset] - chunkdata[i]);
+		errsum += d;
+	}
+
+	return errsum / (double)(chunks * dimensions);
+}
+
+
 void map_indices(int maxiter)
 {
 	unsigned char* chunkdata = gChunkdata + window_offset;
 	outdata = new unsigned char[chunks];
 	int changed = 1;
 	int timeout = 0;
-	while (changed && timeout < maxiter)
+	float err = 1000000;
+	float preverr = err;
+	while (changed && timeout < maxiter && err <= preverr)
 	{
+		preverr = err;
 		printf("%c\r", "\\-/|"[timeout % 4]);
 		timeout++;
 		changed = 0;
@@ -399,8 +424,9 @@ void map_indices(int maxiter)
 					dictionary[g * dimensions + d] = total / count;
 			}
 		}
+		err = verify();
 	}
-	printf("%d iterations\n", timeout);
+	printf("%d iterations, avg error %3.3f\n", timeout, err);
 	fwrite(dictionary, dimensions * 256, 1, outfile);
 	fwrite(outdata, chunks, 1, outfile);
 }
@@ -410,9 +436,9 @@ void finish()
 	fclose(outfile);
 }
 
-void reduce(int cut_type)
+void reduce(int cut_type, int part, int parts)
 {
-	printf("Compressing with %d dimensions at %dHz, window size %d..\n", dimensions, samplerate, window_size);
+	printf("Compressing part %d/%d with %d dimensions at %dHz, window size %d..\n", part, parts, dimensions, samplerate, window_size);
 	analyze_group(0);
 //	while (groups < MAX_GROUPS)
 	for (int i = 1; i < MAX_GROUPS; i++)
@@ -424,27 +450,6 @@ void reduce(int cut_type)
 	}
 }
 
-void verify()
-{
-	unsigned char* chunkdata = gChunkdata + window_offset;
-	// decompress the data and calculate error compared to source.
-	for (int i = 0; i < chunks; i++)
-	{
-		for (int j = 0; j < dimensions; j++)
-		{
-			unpackeddata[i * dimensions + j + window_offset] = dictionary[outdata[i] * dimensions + j];
-		}
-	}
-	long long errsum = 0;	
-	for (int i = 0; i < chunks * dimensions; i++)
-	{
-		int d = abs(unpackeddata[i + window_offset] - chunkdata[i]);
-		errsum += d;
-	}
-	printf("Absolute error: %d\n"
-		   "Average error:  %3.3f\n", 
-		(int)errsum, errsum / (double)(chunks * dimensions));
-}
 
 void save_data(const char* fn, unsigned char*data)
 {
@@ -628,8 +633,13 @@ int main(int parc, char** pars)
 
 	unsigned int total_left = datalen;
 	prep_output(parse.nonOption(1));
+	int part = 0;
+	int parts = 1;
+	if (window)
+		parts += datalen / (window * dimensions);
 	while (total_left > 0)
 	{
+		part++;
 		printf("total left: %d\n", total_left);
 		if (total_left > window * dimensions)
 			window_size = window * dimensions;
@@ -638,13 +648,13 @@ int main(int parc, char** pars)
 		if (window == 0) window_size = datalen;
 
 		init_encode();
-		reduce(cut_type);
+		reduce(cut_type, part, parts);
 		average_groups();
 		map_indices(maxiters);
 		verify();
 		
 		window_offset += window_size;
-		if (window * dimensions < total_left)
+		if (window != 0 && window * dimensions < total_left)
 			total_left -= window * dimensions;
 		else
 			total_left = 0;
