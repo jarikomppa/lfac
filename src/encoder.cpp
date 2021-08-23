@@ -16,141 +16,140 @@
 
 #define MAX_DIMENSIONS 64
 #define MAX_GROUPS 256
-unsigned char* gChunkdata;
-unsigned char* outdata;
-unsigned int* index;
-int group[MAX_GROUPS];
-int groupofs[MAX_GROUPS];
-int groups = 1;
-int analysis[MAX_GROUPS * MAX_DIMENSIONS];
-int chunks = 0;
-int dimensions = 4;
-int datalen = 0;
-unsigned char dictionary[MAX_GROUPS * MAX_DIMENSIONS];
-unsigned char* unpackeddata;
+unsigned char* gChunkData;
+unsigned char* gOutData;
+unsigned char* gUnpackedData;
+unsigned int* gIndex;
+unsigned int gGroup[MAX_GROUPS];
+unsigned int gGroupofs[MAX_GROUPS];
+unsigned int gGroupCount = 1;
+unsigned int gAnalysis[MAX_GROUPS * MAX_DIMENSIONS];
+unsigned int gChunks = 0;
+unsigned int gDimensions = 4;
+unsigned int gDatalen = 0;
+unsigned char gDictionary[MAX_GROUPS * MAX_DIMENSIONS];
+int gWindowOffset = 0;
+int gWindowSize = 0;
+FILE* gOutFile;
+unsigned int gChannels;
+unsigned int gSampleRate;
+unsigned int gWindow;
+float* gSampleData = NULL;
 
-int window_offset = 0;
-int window_size = 0;
 
 // It may seem a bit weird to store the data this way (as a linear
 // pass would work just as well), but this way we can do weird things
 // with chunks if we want to.
 void insert_chunk(unsigned char* p)
 {
-	memcpy(gChunkdata + chunks * dimensions, p, dimensions);
-	chunks++;
+	memcpy(gChunkData + gChunks * gDimensions, p, gDimensions);
+	gChunks++;
 }
 
 void analyze_group(int g)
 {
-	unsigned char* chunkdata = gChunkdata + window_offset;
+	unsigned char* chunkdata = gChunkData + gWindowOffset;
 	int minval[MAX_DIMENSIONS];
 	int maxval[MAX_DIMENSIONS];
-	for (int i = 0; i < dimensions; i++)
+	for (unsigned int i = 0; i < gDimensions; i++)
 	{
-		int v = chunkdata[index[groupofs[g]] * dimensions + i];
+		int v = chunkdata[gIndex[gGroupofs[g]] * gDimensions + i];
 		minval[i] = v;
 		maxval[i] = v;
 	}
-	for (int i = 0; i < group[g]; i++)
+	for (unsigned int i = 0; i < gGroup[g]; i++)
 	{
-		for (int j = 0; j < dimensions; j++)
+		for (unsigned int j = 0; j < gDimensions; j++)
 		{
-			int v = chunkdata[index[groupofs[g] + i] * dimensions + j];
+			int v = chunkdata[gIndex[gGroupofs[g] + i] * gDimensions + j];
 			if (minval[j] > v) minval[j] = v;
 			if (maxval[j] < v) maxval[j] = v;
 		}
 	}
-	for (int i = 0; i < dimensions; i++)
-		analysis[g * dimensions + i] = maxval[i] - minval[i];
+	for (unsigned int i = 0; i < gDimensions; i++)
+		gAnalysis[g * gDimensions + i] = maxval[i] - minval[i];
 }
 
 int find_largest()
 {
-	int v = 0, d = 0, gs = group[0];
-	for (int i = 0; i < dimensions * groups; i++)
+	unsigned int v = 0, d = 0, gs = gGroup[0];
+	for (unsigned int i = 0; i < gDimensions * gGroupCount; i++)
 	{
-		if (analysis[i] > v)
+		if (gAnalysis[i] > v)
 		{
 			d = i;
-			v = analysis[i];
-			gs = group[i / dimensions];
+			v = gAnalysis[i];
+			gs = gGroup[i / gDimensions];
 		} else
-		if (analysis[i] == v && gs < group[i/dimensions])
+		if (gAnalysis[i] == v && gs < gGroup[i/gDimensions])
 		{
 			d = i;
-			v = analysis[i];
-			gs = group[i / dimensions];
+			v = gAnalysis[i];
+			gs = gGroup[i / gDimensions];
 		}
 
 	}
 	return d;
 }
 
-int sortdimension = 0;
+int gSortDimension = 0;
 
 int cmpfunc(const void* a, const void* b)
 {
-	unsigned char* chunkdata = gChunkdata + window_offset;
+	unsigned char* chunkdata = gChunkData + gWindowOffset;
 	int av = *(int*)a;
 	int bv = *(int*)b;
-	return (int)chunkdata[av * dimensions + sortdimension] - 
-		   (int)chunkdata[bv * dimensions + sortdimension];
+	return (int)chunkdata[av * gDimensions + gSortDimension] - 
+		   (int)chunkdata[bv * gDimensions + gSortDimension];
 }
 
 void sort_group(int g, int d)
 {
-	sortdimension = d;
-	qsort(index + groupofs[g], group[g], sizeof(int), cmpfunc);
+	gSortDimension = d;
+	qsort(gIndex + gGroupofs[g], gGroup[g], sizeof(int), cmpfunc);
 }
-
-FILE* outfile;
-unsigned int channels;
-unsigned int samplerate;
-unsigned int window;
-float* sampledata = NULL;
 
 void load_data(const char* fn)
 {
 	// Let's assume wav.
 	drwav_uint64 totalPCMFrameCount;
-	sampledata = drwav_open_file_and_read_pcm_frames_f32(fn, &channels, &samplerate, &totalPCMFrameCount, NULL);
-	datalen = ((int)totalPCMFrameCount / dimensions) * dimensions; // rounded to "dimensions"
+	gSampleData = drwav_open_file_and_read_pcm_frames_f32(fn, &gChannels, &gSampleRate, &totalPCMFrameCount, NULL);
+	gDatalen = ((int)totalPCMFrameCount / gDimensions) * gDimensions; // rounded to "gDimensions"
 
-	if (!sampledata)
+	if (!gSampleData)
 	{
 		// not a wav, what about mp3?
 		drmp3_config conf;
-		sampledata = drmp3_open_file_and_read_pcm_frames_f32(fn, &conf, &totalPCMFrameCount, NULL);
-		if (sampledata)
+		gSampleData = drmp3_open_file_and_read_pcm_frames_f32(fn, &conf, &totalPCMFrameCount, NULL);
+		if (gSampleData)
 		{
-			samplerate = conf.sampleRate;
-			channels = conf.channels;
+			gSampleRate = conf.sampleRate;
+			gChannels = conf.channels;
 		}
 	}
 
-	if (!sampledata)
+	if (!gSampleData)
 	{
 		// flac, maybe?
-		sampledata = drflac_open_file_and_read_pcm_frames_f32(fn, &channels, &samplerate, &totalPCMFrameCount, NULL);
+		gSampleData = drflac_open_file_and_read_pcm_frames_f32(fn, &gChannels, &gSampleRate, &totalPCMFrameCount, NULL);
 	}
 
-	if (!sampledata)
+	if (!gSampleData)
 	{
 		// it must be an ogg then.
 		short* output;
-		int frames = stb_vorbis_decode_filename(fn, (int*)&channels, (int*)&samplerate, &output);	
+		int frames = stb_vorbis_decode_filename(fn, (int*)&gChannels, (int*)&gSampleRate, &output);	
 		if (frames > 0)
 		{
-			datalen = frames * channels;
-			sampledata = new float[datalen];
-			for (int i = 0; i < datalen; i++)
-				sampledata[i] = output[i] * (1.0f / 0x7fff);
+			gDatalen = frames * gChannels;
+			gSampleData = new float[gDatalen];
+			for (unsigned int i = 0; i < gDatalen; i++)
+				gSampleData[i] = output[i] * (1.0f / 0x7fff);
 			free(output);
 		}
 	}
 
-	if (!sampledata)
+	if (!gSampleData)
 	{
 		// okay, keep your secrets.
 		printf("Failed to load data\n");
@@ -160,91 +159,91 @@ void load_data(const char* fn)
 
 void resample(int targetsamplerate, int mono, int fast)
 {
-	if (mono && channels != 1)
+	if (mono && gChannels != 1)
 	{
-		printf("Mixing %d channels to mono..\n", channels);
-		// Mix down to mono by adding all channels together.
-		float* t = new float[datalen / channels];
-		for (unsigned int i = 0; i < (datalen / channels); i++)
+		printf("Mixing %d channels to mono..\n", gChannels);
+		// Mix down to mono by adding all gChannels together.
+		float* t = new float[gDatalen / gChannels];
+		for (unsigned int i = 0; i < (gDatalen / gChannels); i++)
 		{
 			t[i] = 0;
-			for (unsigned int j = 0; j < channels; j++)
-				t[i] += sampledata[i * channels + j];
+			for (unsigned int j = 0; j < gChannels; j++)
+				t[i] += gSampleData[i * gChannels + j];
 		}
-		delete[] sampledata;
-		sampledata = t;
-		datalen /= channels;
-		channels = 1;
+		delete[] gSampleData;
+		gSampleData = t;
+		gDatalen /= gChannels;
+		gChannels = 1;
 	}
 
-	if (targetsamplerate != samplerate)
+	if (targetsamplerate != gSampleRate)
 	{
-		printf("Resampling from %d to %d (libsamplerate %s)..\n", samplerate, targetsamplerate, fast?"SRC_SINC_FASTEST":"SINC_BEST_QUALITY");
+		printf("Resampling from %d to %d (libsamplerate %s)..\n", gSampleRate, targetsamplerate, fast ? "SRC_SINC_FASTEST" : "SINC_BEST_QUALITY");
 		SRC_DATA d;
-		d.data_in = sampledata;
-		d.input_frames = datalen / channels;
-		d.src_ratio = targetsamplerate / (float)samplerate;
-		d.output_frames = (int)((datalen / channels) * d.src_ratio);
+		d.data_in = gSampleData;
+		d.input_frames = gDatalen / gChannels;
+		d.src_ratio = targetsamplerate / (float)gSampleRate;
+		d.output_frames = (int)((gDatalen / gChannels) * d.src_ratio);
 		d.data_out = new float[d.output_frames];
 		
-		if (src_simple(&d, fast?SRC_SINC_FASTEST:SRC_SINC_BEST_QUALITY, channels))
+		if (src_simple(&d, fast ? SRC_SINC_FASTEST : SRC_SINC_BEST_QUALITY, gChannels))
 		{
 			printf("Resampling failed.\n");
 			exit(0);
 		}
 
-		delete[] sampledata;
-		sampledata = d.data_out;
-		datalen = d.output_frames_gen * channels;
-		samplerate = targetsamplerate;
+		delete[] gSampleData;
+		gSampleData = d.data_out;
+		gDatalen = d.output_frames_gen * gChannels;
+		gSampleRate = targetsamplerate;
 	}
 
-	gChunkdata = new unsigned char[datalen];
-	index = new unsigned int[datalen / dimensions];
+	gChunkData = new unsigned char[gDatalen];
+	gIndex = new unsigned int[gDatalen / gDimensions];
 	unsigned char tp[MAX_DIMENSIONS];
-	for (int i = 0; i < datalen / dimensions; i++)
+	for (unsigned int i = 0; i < gDatalen / gDimensions; i++)
 	{
-		for (int j = 0; j < dimensions; j++)
-			tp[j] = (unsigned char)((sampledata[dimensions * i * channels + j] + 1.0) * 127);
+		for (unsigned int j = 0; j < gDimensions; j++)
+			tp[j] = (unsigned char)((gSampleData[gDimensions * i * gChannels + j] + 1.0) * 127);
 		insert_chunk(tp);
 	}
 }
 
 void prep_output(const char* fn)
 {
-	outfile = fopen(fn, "wb");
+	gOutFile = fopen(fn, "wb");
 	int tag = 'CAFL'; // gets reversed
-	fwrite(&tag, 1, 4, outfile);
+	fwrite(&tag, 1, 4, gOutFile);
 	int version = 0;
-	fwrite(&version, 1, 4, outfile);
-	fwrite(&samplerate, 1, 4, outfile);
-	fwrite(&channels, 1, 4, outfile);
-	fwrite(&dimensions, 1, 4, outfile);
-	fwrite(&window, 1, 4, outfile);
-	fwrite(&datalen, 1, 4, outfile);
+	fwrite(&version, 1, 4, gOutFile);
+	fwrite(&gSampleRate, 1, 4, gOutFile);
+	fwrite(&gChannels, 1, 4, gOutFile);
+	fwrite(&gDimensions, 1, 4, gOutFile);
+	fwrite(&gWindow, 1, 4, gOutFile);
+	fwrite(&gDatalen, 1, 4, gOutFile);
 	int reserved = 0;
-	fwrite(&reserved, 1, 4, outfile);
+	fwrite(&reserved, 1, 4, gOutFile);
 }
 
 void init_encode()
 {
 	for (int i = 0; i < MAX_GROUPS; i++)
 	{
-		group[i] = 0;
-		groupofs[i] = 0;
+		gGroup[i] = 0;
+		gGroupofs[i] = 0;
 	}
 
-	groups = 1;
+	gGroupCount = 1;
 
-	chunks = window_size / dimensions;
+	gChunks = gWindowSize / gDimensions;
 
-	for (int i = 0; i < chunks; i++)
-		index[i] = i;
+	for (unsigned int i = 0; i < gChunks; i++)
+		gIndex[i] = i;
 
-	for (int i = 0; i < MAX_GROUPS * MAX_DIMENSIONS; i++)
-		analysis[i] = -1;
+	for (unsigned int i = 0; i < MAX_GROUPS * MAX_DIMENSIONS; i++)
+		gAnalysis[i] = -1;
 
-	group[0] = chunks; // first group contains all chunks
+	gGroup[0] = gChunks; // first group contains all chunks
 }
 
 enum {
@@ -256,28 +255,28 @@ enum {
 
 void split_group(int g, int d, int cut_type)
 {
-	unsigned char* chunkdata = gChunkdata + window_offset;
-	//printf("Splitting group %3d, dimension %d, delta %3d (%d items)\n", g, d, analysis[g*dimensions+d], group[g]);
+	unsigned char* chunkdata = gChunkData + gWindowOffset;
+	//printf("Splitting group %3d, dimension %d, delta %3d (%d items)\n", g, d, gAnalysis[g*gDimensions+d], gGroup[g]);
 	sort_group(g, d);
 	int total = 0;
 	int minval = 255, maxval = 0;
-	for (int i = 0; i < group[g]; i++)
+	for (unsigned int i = 0; i < gGroup[g]; i++)
 	{
-		total += chunkdata[index[groupofs[g] + i] * dimensions + d];		
-		if (chunkdata[index[groupofs[g] + i] * dimensions + d] > maxval) maxval = chunkdata[index[groupofs[g] + i] * dimensions + d];
-		if (chunkdata[index[groupofs[g] + i] * dimensions + d] < minval) minval = chunkdata[index[groupofs[g] + i] * dimensions + d];
+		total += chunkdata[gIndex[gGroupofs[g] + i] * gDimensions + d];		
+		if (chunkdata[gIndex[gGroupofs[g] + i] * gDimensions + d] > maxval) maxval = chunkdata[gIndex[gGroupofs[g] + i] * gDimensions + d];
+		if (chunkdata[gIndex[gGroupofs[g] + i] * gDimensions + d] < minval) minval = chunkdata[gIndex[gGroupofs[g] + i] * gDimensions + d];
 	}
 	if (total < 0)
 	{
 		printf("borked\n");
 		exit(0);
 	}
-	int i = 0;
+	unsigned int i = 0;
 	if (cut_type == CUT_MEAN)
 	{
 		// average cut
 		int midval = minval + (maxval - minval) / 2;
-		while (chunkdata[index[groupofs[g] + i] * dimensions + d] < midval) i++;
+		while (chunkdata[gIndex[gGroupofs[g] + i] * gDimensions + d] < midval) i++;
 	}
 	if (cut_type == CUT_AVERAGE)
 	{
@@ -286,166 +285,165 @@ void split_group(int g, int d, int cut_type)
 		// median cut
 		while (total < split)
 		{
-			total += chunkdata[index[groupofs[g] + i] * dimensions + d];
+			total += chunkdata[gIndex[gGroupofs[g] + i] * gDimensions + d];
 			i++;
 		}
 	}
 	if (cut_type == CUT_EVEN)
 	{
-		i = group[g] / 2; // halve space
+		i = gGroup[g] / 2; // halve space
 	}
 	if (cut_type == CUT_MEDIAN)
 	{
-		i = group[g] / 2;
-		int v = chunkdata[index[groupofs[g] + i] * dimensions + d];
-		while (i > 0 && v == chunkdata[index[groupofs[g] + i] * dimensions + d]) i--;
+		i = gGroup[g] / 2;
+		int v = chunkdata[gIndex[gGroupofs[g] + i] * gDimensions + d];
+		while (i > 0 && v == chunkdata[gIndex[gGroupofs[g] + i] * gDimensions + d]) i--;
 		if (i == 0)
 		{
-			i = group[g] / 2;
-			v = chunkdata[index[groupofs[g] + i] * dimensions + d];
-			while (i < group[g] && v == chunkdata[index[groupofs[g] + i] * dimensions + d]) i++;
-			if (i == group[g])
+			i = gGroup[g] / 2;
+			v = chunkdata[gIndex[gGroupofs[g] + i] * gDimensions + d];
+			while (i < gGroup[g] && v == chunkdata[gIndex[gGroupofs[g] + i] * gDimensions + d]) i++;
+			if (i == gGroup[g])
 				i /= 2;
 		}
 	}
 
-	if (i == group[g])
+	if (i == gGroup[g])
 		i--; // avoid splitting to empty groups
 	if (i < 1) return;
-	group[groups] = group[g] - i;
-	groupofs[groups] = groupofs[g] + i;
-	group[g] = i;
+	gGroup[gGroupCount] = gGroup[g] - i;
+	gGroupofs[gGroupCount] = gGroupofs[g] + i;
+	gGroup[g] = i;
 	analyze_group(g);
-	analyze_group(groups);
-	groups++;
+	analyze_group(gGroupCount);
+	gGroupCount++;
 }
 
 float dist(const unsigned char* a, const unsigned char* b)
 {
 	float s = 0;
-	for (int i = 0; i < dimensions; i++)
+	for (unsigned int i = 0; i < gDimensions; i++)
 		s += ((float)a[i] - (float)b[i]) * ((float)a[i] - (float)b[i]);
 	return (float)sqrt(s);
 }
 
 void average_groups()
 {
-	unsigned char* chunkdata = gChunkdata + window_offset;
-	for (int i = 0; i < groups * dimensions; i++)
-		dictionary[i] = 0;
+	unsigned char* chunkdata = gChunkData + gWindowOffset;
+	for (unsigned int i = 0; i < gGroupCount * gDimensions; i++)
+		gDictionary[i] = 0;
 
 	// Calculate average chunk
-	for (int g = 0; g < groups; g++)
+	for (unsigned int g = 0; g < gGroupCount; g++)
 	{
-		for (int d = 0; d < dimensions; d++)
+		for (unsigned int d = 0; d < gDimensions; d++)
 		{
-			int total = 0;
-			for (int i = 0; i < group[g]; i++)
-				total += chunkdata[index[groupofs[g] + i] * dimensions + d];
-			dictionary[g * dimensions + d] = total / group[g];
+			unsigned int total = 0;
+			for (unsigned int i = 0; i < gGroup[g]; i++)
+				total += chunkdata[gIndex[gGroupofs[g] + i] * gDimensions + d];
+			gDictionary[g * gDimensions + d] = total / gGroup[g];
 		}
 	}
 	
 }
 
-float verify()
+double verify()
 {
-	unsigned char* chunkdata = gChunkdata + window_offset;
+	unsigned char* chunkdata = gChunkData + gWindowOffset;
 	// decompress the data and calculate error compared to source.
-	for (int i = 0; i < chunks; i++)
+	for (unsigned int i = 0; i < gChunks; i++)
 	{
-		for (int j = 0; j < dimensions; j++)
+		for (unsigned int j = 0; j < gDimensions; j++)
 		{
-			unpackeddata[i * dimensions + j + window_offset] = dictionary[outdata[i] * dimensions + j];
+			gUnpackedData[i * gDimensions + j + gWindowOffset] = gDictionary[gOutData[i] * gDimensions + j];
 		}
 	}
 	long long errsum = 0;
-	for (int i = 0; i < chunks * dimensions; i++)
+	for (unsigned int i = 0; i < gChunks * gDimensions; i++)
 	{
-		int d = abs(unpackeddata[i + window_offset] - chunkdata[i]);
+		int d = abs(gUnpackedData[i + gWindowOffset] - chunkdata[i]);
 		errsum += d;
 	}
 
-	return errsum / (double)(chunks * dimensions);
+	return errsum / (double)(gChunks * gDimensions);
 }
 
 
 void map_indices(int maxiter)
 {
-	unsigned char* chunkdata = gChunkdata + window_offset;
-	outdata = new unsigned char[chunks];
+	unsigned char* chunkdata = gChunkData + gWindowOffset;
+	gOutData = new unsigned char[gChunks];
 	int changed = 1;
 	int timeout = 0;
-	float err = 1000000;
-	float preverr = err;
+	double err = 1000000;
+	double preverr = err;
 	while (changed && timeout < maxiter && err <= preverr)
 	{
 		preverr = err;
 		printf("%c\r", "\\-/|"[timeout % 4]);
 		timeout++;
 		changed = 0;
-		for (int i = 0; i < chunks; i++)
+		for (unsigned int i = 0; i < gChunks; i++)
 		{
 			int idx = 0;
-			float distance = dist(dictionary, chunkdata + i * dimensions);
+			float distance = dist(gDictionary, chunkdata + i * gDimensions);
 
-			for (int g = 1; g < groups; g++)
+			for (unsigned int g = 1; g < gGroupCount; g++)
 			{
-				float d = dist(dictionary + g * dimensions, chunkdata + i * dimensions);
+				float d = dist(gDictionary + g * gDimensions, chunkdata + i * gDimensions);
 				if (d < distance)
 				{
 					distance = d;
 					idx = g;
 				}
 			}
-			if (outdata[i] != idx)
+			if (gOutData[i] != idx)
 			{
-				outdata[i] = idx;
+				gOutData[i] = idx;
 				changed = 1;
 			}
 		}
 
 		// Recalculate averages
-		for (int d = 0; d < dimensions; d++)
+		for (unsigned int d = 0; d < gDimensions; d++)
 		{
-			for (int g = 0; g < 256; g++)
+			for (unsigned int g = 0; g < 256; g++)
 			{
 				int total = 0;
 				int count = 0;
-				for (int i = 0; i < chunks; i++)
+				for (unsigned int i = 0; i < gChunks; i++)
 				{
-					if (outdata[i] == g)
+					if (gOutData[i] == g)
 					{
-						total += *(chunkdata + i * dimensions + d);
+						total += *(chunkdata + i * gDimensions + d);
 						count++;
 					}
 				}
 				if (count != 0)
-					dictionary[g * dimensions + d] = total / count;
+					gDictionary[g * gDimensions + d] = total / count;
 			}
 		}
 		err = verify();
 	}
 	printf("%d iterations, avg error %3.3f\n", timeout, err);
-	fwrite(dictionary, dimensions * 256, 1, outfile);
-	fwrite(outdata, chunks, 1, outfile);
+	fwrite(gDictionary, gDimensions * 256, 1, gOutFile);
+	fwrite(gOutData, gChunks, 1, gOutFile);
 }
 
 void finish()
 {
-	fclose(outfile);
+	fclose(gOutFile);
 }
 
 void reduce(int cut_type, int part, int parts)
 {
-	printf("Compressing part %d/%d with %d dimensions at %dHz, window size %d..\n", part, parts, dimensions, samplerate, window_size);
+	printf("Compressing part %d/%d with %d dimensions at %dHz, %d byte window..\n", part, parts, gDimensions, gSampleRate, gWindowSize);
 	analyze_group(0);
-//	while (groups < MAX_GROUPS)
 	for (int i = 1; i < MAX_GROUPS; i++)
 	{
 		int t = find_largest();
-		int g = t / dimensions;
-		int d = t % dimensions;
+		int g = t / gDimensions;
+		int d = t % gDimensions;
 		split_group(g, d, cut_type);
 	}
 }
@@ -456,8 +454,8 @@ void save_data(const char* fn, unsigned char*data)
 	drwav_data_format format;
 	format.container = drwav_container_riff;
 	format.format = DR_WAVE_FORMAT_PCM;
-	format.channels = channels;
-	format.sampleRate = samplerate;
+	format.channels = gChannels;
+	format.sampleRate = gSampleRate;
 	format.bitsPerSample = 8;
 	drwav wav;
 	if (!drwav_init_file_write(&wav, fn, &format, NULL))
@@ -465,40 +463,40 @@ void save_data(const char* fn, unsigned char*data)
 		printf("Failed to open \"%s\" for writing\n", fn);
 		return;
 	}
-	drwav_write_pcm_frames(&wav, chunks * dimensions / channels, data);
+	drwav_write_pcm_frames(&wav, gDatalen, data);
 	drwav_uninit(&wav);
 }
 
 void save_compare_data(const char* fn, int fast)
 {
-	int windowing_extra_data = window ? (datalen / (dimensions * window)) * 256 * dimensions : 0;
-	int compress_size = datalen / dimensions + 256 * dimensions + windowing_extra_data;
-	float compressionratio = compress_size / (float)datalen;
-	int targetsamplerate = (int)(samplerate * compressionratio);
+	int windowing_extra_data = gWindow ? (gDatalen / (gDimensions * gWindow)) * 256 * gDimensions : 0;
+	int compress_size = gDatalen / gDimensions + 256 * gDimensions + windowing_extra_data;
+	float compressionratio = compress_size / (float)gDatalen;
+	int targetsamplerate = (int)(gSampleRate * compressionratio);
 	
 	printf("Saving compare file \"%s\" at sample rate %dHz\n", fn, targetsamplerate);
 
 	SRC_DATA d;
-	d.data_in = sampledata;
-	d.input_frames = datalen / channels;
-	d.src_ratio = targetsamplerate / (float)samplerate;
-	d.output_frames = (int)((datalen / channels) * d.src_ratio);
+	d.data_in = gSampleData;
+	d.input_frames = gDatalen / gChannels;
+	d.src_ratio = targetsamplerate / (float)gSampleRate;
+	d.output_frames = (int)((gDatalen / gChannels) * d.src_ratio);
 	d.data_out = new float[d.output_frames];
 
-	if (src_simple(&d, fast ? SRC_SINC_FASTEST : SRC_SINC_BEST_QUALITY, channels))
+	if (src_simple(&d, fast ? SRC_SINC_FASTEST : SRC_SINC_BEST_QUALITY, gChannels))
 	{
 		printf("Resampling failed.\n");
 		exit(0);
 	}
 
-	unsigned char* data = new unsigned char[datalen];
-	for (int i = 0; i < datalen; i++)
+	unsigned char* data = new unsigned char[d.output_frames_gen * gChannels];
+	for (unsigned int i = 0; i < d.output_frames_gen * gChannels; i++)
 		data[i] = (unsigned char)((d.data_out[i] * 0.5 + 0.5) * 255);
 
 	drwav_data_format format;
 	format.container = drwav_container_riff;
 	format.format = DR_WAVE_FORMAT_PCM;
-	format.channels = channels;
+	format.channels = gChannels;
 	format.sampleRate = targetsamplerate;
 	format.bitsPerSample = 8;
 	drwav wav;
@@ -507,7 +505,7 @@ void save_compare_data(const char* fn, int fast)
 		printf("Failed to open \"%s\" for writing\n", fn);
 		return;
 	}
-	drwav_write_pcm_frames(&wav, d.output_frames_gen * channels, data);
+	drwav_write_pcm_frames(&wav, d.output_frames_gen * gChannels, data);
 	drwav_uninit(&wav);
 
 	delete[] data;
@@ -529,7 +527,7 @@ const option::Descriptor usage[] =
 	{ FASTRS,       0, "f", "fastresample", option::Arg::None,   " -f --fastresample\t Use fast resampler (default: SINC_BEST)"},
 	{ CUTTYPE,		0, "x", "cuttype", option::Arg::Optional,    " -x --cuttype=type\t Subspace cut type: even, mean, average, median. (default: median)"},
 	{ MAXITER,      0, "i", "maxiter", option::Arg::Optional,    " -i --maxiter=iters\t Maximum iterations for re-centering grains (default:10)"},
-	{ UNKNOWN,      0, "", "", option::Arg::None,				 "Example:\n  encoder dasboot.mp3 theshoe.sad -m --window=65536 -d 16"},
+	{ UNKNOWN,      0, "", "", option::Arg::None,				 "Example:\n  encoder dasboot.mp3 theshoe.sad -m --gWindow=65536 -d16"},
 	{ 0,0,0,0,0,0 }
 };
 
@@ -558,13 +556,13 @@ int main(int parc, char** pars)
 
 	if (options[DIMENSIONS] && options[DIMENSIONS].arg)
 	{
-		dimensions = atoi(options[DIMENSIONS].arg);
-		if (dimensions < 2 || dimensions > 64)
+		gDimensions = atoi(options[DIMENSIONS].arg);
+		if (gDimensions < 2 || gDimensions > 64)
 		{
 			printf("Bad value for dimensions. Try something like 2 or 16.\n");
 			return 0;
 		}
-		if (dimensions > 16)
+		if (gDimensions > 16)
 		{
 			printf("Note: dimensions set quite high. Quality will likely be horrible.\n");
 		}
@@ -572,24 +570,24 @@ int main(int parc, char** pars)
 
 	if (options[WINDOW] && options[WINDOW].arg)
 	{
-		window = atoi(options[WINDOW].arg);
-		if (window == 0)
+		gWindow = atoi(options[WINDOW].arg);
+		if (gWindow == 0)
 		{
 			// fine
 		}
 		else
-		if (window < dimensions * dimensions * 256 / (dimensions - 1))
+		if (gWindow < gDimensions * gDimensions * 256 / (gDimensions - 1))
 		{
-			printf("Given window size (%d) would cause resulting file to be bigger than original. (break even at %d)\n", window, dimensions * dimensions * 256 / (dimensions - 1));
+			printf("Given window size (%d) would cause resulting file to be bigger than original. (break even at %d)\n", gWindow, gDimensions * gDimensions * 256 / (gDimensions - 1));
 			return 0;
 		}
 	}
 
 	load_data(parse.nonOption(0));
-	if (window > datalen / dimensions)
-		window = datalen / dimensions;
-	unpackeddata = new unsigned char[datalen];
-	int sr = samplerate;
+	if (gWindow > gDatalen / gDimensions)
+		gWindow = gDatalen / gDimensions;
+	gUnpackedData = new unsigned char[gDatalen];
+	int sr = gSampleRate;
 	if (options[SAMPLERATE] && options[SAMPLERATE].arg)
 		sr = atoi(options[SAMPLERATE].arg);
 	if (sr < 1 || sr > 256000)
@@ -625,27 +623,27 @@ int main(int parc, char** pars)
 	if (options[SAVESRC] && options[SAVESRC].arg && strlen(options[SAVESRC].arg) > 0)
 	{
 		printf("Saving source data as \"%s\"\n", options[SAVESRC].arg);
-		save_data(options[SAVESRC].arg, gChunkdata);
+		save_data(options[SAVESRC].arg, gChunkData);
 	}
 
 	if (options[SAVECMP] && options[SAVECMP].arg && strlen(options[SAVECMP].arg) > 0)
 		save_compare_data(options[SAVECMP].arg, !!options[FASTRS]);
 
-	unsigned int total_left = datalen;
+	unsigned int total_left = gDatalen;
 	prep_output(parse.nonOption(1));
 	int part = 0;
 	int parts = 1;
-	if (window)
-		parts += datalen / (window * dimensions);
+	if (gWindow)
+		parts += gDatalen / (gWindow * gDimensions);
 	while (total_left > 0)
 	{
 		part++;
-		printf("total left: %d\n", total_left);
-		if (total_left > window * dimensions)
-			window_size = window * dimensions;
+		printf("Total bytes left: %d\n", total_left);
+		if (total_left > gWindow * gDimensions)
+			gWindowSize = gWindow * gDimensions;
 		else
-			window_size = total_left;
-		if (window == 0) window_size = datalen;
+			gWindowSize = total_left;
+		if (gWindow == 0) gWindowSize = gDatalen;
 
 		init_encode();
 		reduce(cut_type, part, parts);
@@ -653,9 +651,9 @@ int main(int parc, char** pars)
 		map_indices(maxiters);
 		verify();
 		
-		window_offset += window_size;
-		if (window != 0 && window * dimensions < total_left)
-			total_left -= window * dimensions;
+		gWindowOffset += gWindowSize;
+		if (gWindow != 0 && gWindow * gDimensions < total_left)
+			total_left -= gWindow * gDimensions;
 		else
 			total_left = 0;
 	}
@@ -663,7 +661,7 @@ int main(int parc, char** pars)
 	if (options[SAVE] && options[SAVE].arg && strlen(options[SAVE].arg) > 0)
 	{
 		printf("Saving uncompressed data as \"%s\"\n", options[SAVE].arg);
-		save_data(options[SAVE].arg, unpackeddata);
+		save_data(options[SAVE].arg, gUnpackedData);
 	}
 	return 0;
 }
