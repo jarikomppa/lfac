@@ -161,7 +161,7 @@ void resample(int targetsamplerate, int mono, int fast)
 {
 	if (mono && gChannels != 1)
 	{
-		printf("Mixing %d channels to mono..\n", gChannels);
+		printf("Mixing %d channels to mono.\n", gChannels);
 		// Mix down to mono by adding all gChannels together.
 		float* t = new float[gDatalen / gChannels];
 		for (unsigned int i = 0; i < (gDatalen / gChannels); i++)
@@ -178,7 +178,7 @@ void resample(int targetsamplerate, int mono, int fast)
 
 	if (targetsamplerate != gSampleRate)
 	{
-		printf("Resampling from %d to %d (libsamplerate %s)..\n", gSampleRate, targetsamplerate, fast ? "SRC_SINC_FASTEST" : "SINC_BEST_QUALITY");
+		printf("Resampling from %d to %d (libsamplerate %s).\n", gSampleRate, targetsamplerate, fast ? "SRC_SINC_FASTEST" : "SINC_BEST_QUALITY");
 		SRC_DATA d;
 		d.data_in = gSampleData;
 		d.input_frames = gDatalen / gChannels;
@@ -437,7 +437,7 @@ void finish()
 
 void reduce(int cut_type, int part, int parts)
 {
-	printf("Compressing part %d/%d with %d dimensions at %dHz, %d byte window..\n", part, parts, gDimensions, gSampleRate, gWindowSize);
+	printf("Compressing part %d/%d with %d dimensions at %dHz, %d byte / %d grain window.\n", part, parts, gDimensions, gSampleRate, gWindowSize, gWindowSize / gDimensions);
 	analyze_group(0);
 	for (int i = 1; i < MAX_GROUPS; i++)
 	{
@@ -512,7 +512,7 @@ void save_compare_data(const char* fn, int fast)
 	delete[] d.data_out;
 }
 
-enum optionIndex { UNKNOWN, HELP, SAMPLERATE, DIMENSIONS, MONO, WINDOW, SAVE, SAVESRC, SAVECMP, FASTRS, CUTTYPE, MAXITER };
+enum optionIndex { UNKNOWN, HELP, SAMPLERATE, DIMENSIONS, MONO, WINDOW, SAVE, SAVESRC, SAVECMP, FASTRS, CUTTYPE, MAXITER, CUTS };
 const option::Descriptor usage[] =
 {
 	{ UNKNOWN,		0, "", "",	option::Arg::None,				 "USAGE: encoder inputfilename outputfilename [options]\n\nOptions:"},
@@ -521,6 +521,7 @@ const option::Descriptor usage[] =
 	{ DIMENSIONS,	0, "d", "dimensions", option::Arg::Optional, " -d --dimensions=dim\t Set number of dimensions (default 4)"},
 	{ MONO,			0, "m", "mono", option::Arg::None,			 " -m --mono\t Mix to mono (default: use source)"},
 	{ WINDOW,		0, "w", "window", option::Arg::Optional,	 " -w --window=winsize\t Set window size in grains (default: infinite)"},
+	{ CUTS,         0, "z", "cuts", option::Arg::Optional,       " -z --cuts=n\t Cut source in N windows (default: one)"},
 	{ SAVE,         0, "o", "saveout", option::Arg::Optional,    " -o --saveout=filename\t Save re-decompressed file (default: don't)"},
 	{ SAVESRC,      0, "s", "savesrc", option::Arg::Optional,    " -s --savesrc=filename\t Save raw soure data (after resampling) (default: don't)"},
 	{ SAVECMP,      0, "c", "savecmp", option::Arg::Optional,    " -c --savecmp=filename\t Save size-comparable low-freq wav (default: don't)"},
@@ -584,9 +585,7 @@ int main(int parc, char** pars)
 	}
 
 	load_data(parse.nonOption(0));
-	if (gWindow > gDatalen / gDimensions)
-		gWindow = gDatalen / gDimensions;
-	gUnpackedData = new unsigned char[gDatalen];
+
 	int sr = gSampleRate;
 	if (options[SAMPLERATE] && options[SAMPLERATE].arg)
 		sr = atoi(options[SAMPLERATE].arg);
@@ -619,6 +618,28 @@ int main(int parc, char** pars)
 	}
 
 	resample(sr, !!options[MONO], !!options[FASTRS]);
+
+	if (options[CUTS] && options[CUTS].arg)
+	{
+		int cuts = atoi(options[CUTS].arg);
+		if (cuts <= 0)
+		{
+			printf("Invalid number of cuts (%d) specified\n", cuts);
+			return 0;
+		}
+		int w = (gDatalen / gDimensions) / cuts;
+		// make sure last window doesn't end up being really tiny..
+		if (w * cuts * gDimensions < gDatalen) w++;
+		gWindow = w;
+		printf("Cutting source to %d pieces, yielding %d grain window.\n", cuts, w);
+	}
+
+
+	if (gWindow > gDatalen / gDimensions)
+		gWindow = gDatalen / gDimensions;
+
+	gUnpackedData = new unsigned char[gDatalen];
+
 
 	if (options[SAVESRC] && options[SAVESRC].arg && strlen(options[SAVESRC].arg) > 0)
 	{
