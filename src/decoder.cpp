@@ -27,7 +27,7 @@ void load_data(const char* fn)
 	fclose(f);
 }
 
-int samplerate, channels, dimensions, chunks, window, datasize;
+int samplerate, channels, dimensions, window, datasize;
 
 void decode()
 {
@@ -44,17 +44,39 @@ void decode()
 	window = hd[5];
 	datasize = hd[6];
 
+	printf(
+		"Samplerate: %d\n"
+		"Channels:   %d\n"
+		"Dimensions: %d\n"
+		"Window:     %d\n"
+		"Data size:  %d\n",
+		samplerate, channels, dimensions, window, datasize);
+
 	unsigned char* dictionary = rawdata + 8 * sizeof(int);
 	unsigned char* data = dictionary + dimensions * 256;
-	chunks = rawlen - 8 * sizeof(int) - dimensions * 256;
 
-	outdata = new unsigned char[chunks * dimensions];
+	outdata = new unsigned char[datasize];
 
-	for (int i = 0; i < chunks; i++)
-	{
+	unsigned char* out = outdata;
+	int i = 0;
+	int ws = window;
+	int dataleft = datasize;
+	while (dataleft > 0)
+	{ 
 		for (int j = 0; j < dimensions; j++)
 		{
-			outdata[i * dimensions + j] = dictionary[data[i] * dimensions + j];
+			*out = dictionary[data[i] * dimensions + j];
+			out++;
+			dataleft--;
+		}
+		i++;
+		ws--;
+		if (ws == 0)
+		{
+			ws = window;
+			dictionary = data + window;
+			data = dictionary + dimensions * 256;
+			i = 0;
 		}
 	}
 }
@@ -73,7 +95,7 @@ void save_data()
 		printf("Unable to open output file\n");
 		exit(0);
 	}
-	drwav_write_pcm_frames(&wav, chunks * dimensions / channels, outdata);
+	drwav_write_pcm_frames(&wav, datasize / channels, outdata);
 	drwav_uninit(&wav);
 }
 
