@@ -114,7 +114,6 @@ void load_data(const char* fn)
 	// Let's assume wav.
 	drwav_uint64 totalPCMFrameCount;
 	gSampleData = drwav_open_file_and_read_pcm_frames_f32(fn, &gChannels, &gSampleRate, &totalPCMFrameCount, NULL);
-	gDatalen = ((int)totalPCMFrameCount / gDimensions) * gDimensions; // rounded to "gDimensions"
 
 	if (!gSampleData)
 	{
@@ -146,6 +145,7 @@ void load_data(const char* fn)
 			for (unsigned int i = 0; i < gDatalen; i++)
 				gSampleData[i] = output[i] * (1.0f / 0x7fff);
 			free(output);
+			totalPCMFrameCount = frames;
 		}
 	}
 
@@ -155,6 +155,8 @@ void load_data(const char* fn)
 		printf("Failed to load data\n");
 		exit(0);
 	}
+
+	gDatalen = ((int)(totalPCMFrameCount * gChannels) / gDimensions) * gDimensions; // rounded to "gDimensions"
 }
 
 void resample(int targetsamplerate, int mono, int fast)
@@ -164,16 +166,30 @@ void resample(int targetsamplerate, int mono, int fast)
 		printf("Mixing %d channels to mono.\n", gChannels);
 		// Mix down to mono by adding all gChannels together.
 		float* t = new float[gDatalen / gChannels];
+		float mag = 0;
+		float srcmag = 0;
 		for (unsigned int i = 0; i < (gDatalen / gChannels); i++)
 		{
 			t[i] = 0;
 			for (unsigned int j = 0; j < gChannels; j++)
-				t[i] += gSampleData[i * gChannels + j];
+			{
+				float src = gSampleData[i * gChannels + j];
+				t[i] += src;
+				if (abs(src) > srcmag) srcmag = abs(src);
+			}
+			if (abs(t[i]) > mag) mag = abs(t[i]);
 		}
 		delete[] gSampleData;
 		gSampleData = t;
 		gDatalen /= gChannels;
 		gChannels = 1;
+		
+		// re-scale magnitude to original levels
+		if (srcmag != 0)
+		for (unsigned int i = 0; i < gDatalen; i++)
+		{
+			gSampleData[i] *= srcmag / mag;
+		}
 	}
 
 	if (targetsamplerate != gSampleRate)
@@ -184,7 +200,7 @@ void resample(int targetsamplerate, int mono, int fast)
 		d.input_frames = gDatalen / gChannels;
 		d.src_ratio = targetsamplerate / (float)gSampleRate;
 		d.output_frames = (int)((gDatalen / gChannels) * d.src_ratio);
-		d.data_out = new float[d.output_frames];
+		d.data_out = new float[d.output_frames * gChannels];
 		
 		if (src_simple(&d, fast ? SRC_SINC_FASTEST : SRC_SINC_BEST_QUALITY, gChannels))
 		{
@@ -204,7 +220,7 @@ void resample(int targetsamplerate, int mono, int fast)
 	for (unsigned int i = 0; i < gDatalen / gDimensions; i++)
 	{
 		for (unsigned int j = 0; j < gDimensions; j++)
-			tp[j] = (unsigned char)((gSampleData[gDimensions * i * gChannels + j] + 1.0) * 127);
+			tp[j] = (unsigned char)((gSampleData[gDimensions * i + j] + 1.0) * 127);
 		insert_chunk(tp);
 	}
 }
@@ -463,7 +479,7 @@ void save_data(const char* fn, unsigned char*data)
 		printf("Failed to open \"%s\" for writing\n", fn);
 		return;
 	}
-	drwav_write_pcm_frames(&wav, gDatalen, data);
+	drwav_write_pcm_frames(&wav, gDatalen / gChannels, data);
 	drwav_uninit(&wav);
 }
 
@@ -481,7 +497,7 @@ void save_compare_data(const char* fn, int fast)
 	d.input_frames = gDatalen / gChannels;
 	d.src_ratio = targetsamplerate / (float)gSampleRate;
 	d.output_frames = (int)((gDatalen / gChannels) * d.src_ratio);
-	d.data_out = new float[d.output_frames];
+	d.data_out = new float[d.output_frames * gChannels];
 
 	if (src_simple(&d, fast ? SRC_SINC_FASTEST : SRC_SINC_BEST_QUALITY, gChannels))
 	{
@@ -505,7 +521,7 @@ void save_compare_data(const char* fn, int fast)
 		printf("Failed to open \"%s\" for writing\n", fn);
 		return;
 	}
-	drwav_write_pcm_frames(&wav, d.output_frames_gen * gChannels, data);
+	drwav_write_pcm_frames(&wav, d.output_frames_gen, data);
 	drwav_uninit(&wav);
 
 	delete[] data;
