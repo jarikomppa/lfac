@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <iostream> // needed by optionparser
 #define DR_WAV_IMPLEMENTATION
 #include "../external/dr_wav.h"
 #define DR_MP3_IMPLEMENTATION
@@ -10,9 +11,10 @@
 #define DR_FLAC_IMPLEMENTATION
 #include "../external/dr_flac.h"
 #include "../external/stb_vorbis.c"
-#include <iostream>
 #include "../external/optionparser.h"
 #include "../external/libsamplerate/samplerate.h"
+
+#include "vq.hpp"
 
 #define MAX_DIMENSIONS 64
 #define MAX_GROUPS 256
@@ -335,12 +337,12 @@ void split_group(int g, int d, int cut_type)
 	gGroupCount++;
 }
 
-float dist(const unsigned char* a, const unsigned char* b)
+double dist(const unsigned char* a, const unsigned char* b)
 {
-	float s = 0;
+	double s = 0;
 	for (unsigned int i = 0; i < gDimensions; i++)
-		s += ((float)a[i] - (float)b[i]) * ((float)a[i] - (float)b[i]);
-	return (float)sqrt(s);
+		s += ((double)a[i] - (double)b[i]) * ((double)a[i] - (double)b[i]);
+	return sqrt(s);
 }
 
 void average_groups()
@@ -354,13 +356,15 @@ void average_groups()
 	{
 		for (unsigned int d = 0; d < gDimensions; d++)
 		{
-			unsigned int total = 0;
-			for (unsigned int i = 0; i < gGroup[g]; i++)
-				total += chunkdata[gIndex[gGroupofs[g] + i] * gDimensions + d];
-			gDictionary[g * gDimensions + d] = total / gGroup[g];
+			if (gGroup[g])
+			{
+				unsigned int total = 0;
+				for (unsigned int i = 0; i < gGroup[g]; i++)
+					total += chunkdata[gIndex[gGroupofs[g] + i] * gDimensions + d];
+				gDictionary[g * gDimensions + d] = total / gGroup[g];
+			}
 		}
 	}
-	
 }
 
 double verify()
@@ -385,6 +389,32 @@ double verify()
 }
 
 
+void map_indices()
+{
+	unsigned char* chunkdata = gChunkData + gWindowOffset;
+	gOutData = new unsigned char[gChunks];
+	for (unsigned int i = 0; i < gChunks; i++)
+	{
+		int idx = 0;
+		double distance = dist(gDictionary, chunkdata + i * gDimensions);
+
+		for (unsigned int g = 1; g < gGroupCount; g++)
+		{
+			double d = dist(gDictionary + g * gDimensions, chunkdata + i * gDimensions);
+			if (d < distance)
+			{
+				distance = d;
+				idx = g;
+			}
+		}
+		gOutData[i] = idx;
+	}
+	double err = verify();
+	printf("avg error %3.3f\n", err);
+	fwrite(gDictionary, gDimensions * 256, 1, gOutFile);
+	fwrite(gOutData, gChunks, 1, gOutFile);
+}
+
 void map_indices(int maxiter)
 {
 	unsigned char* chunkdata = gChunkData + gWindowOffset;
@@ -402,11 +432,11 @@ void map_indices(int maxiter)
 		for (unsigned int i = 0; i < gChunks; i++)
 		{
 			int idx = 0;
-			float distance = dist(gDictionary, chunkdata + i * gDimensions);
+			double distance = dist(gDictionary, chunkdata + i * gDimensions);
 
 			for (unsigned int g = 1; g < gGroupCount; g++)
 			{
-				float d = dist(gDictionary + g * gDimensions, chunkdata + i * gDimensions);
+				double d = dist(gDictionary + g * gDimensions, chunkdata + i * gDimensions);
 				if (d < distance)
 				{
 					distance = d;
@@ -421,9 +451,10 @@ void map_indices(int maxiter)
 		}
 
 		// Recalculate averages
-		for (unsigned int d = 0; d < gDimensions; d++)
+
+		for (unsigned int g = 0; g < 256; g++)
 		{
-			for (unsigned int g = 0; g < 256; g++)
+			for (unsigned int d = 0; d < gDimensions; d++)
 			{
 				int total = 0;
 				int count = 0;
@@ -437,8 +468,12 @@ void map_indices(int maxiter)
 				}
 				if (count != 0)
 					gDictionary[g * gDimensions + d] = total / count;
+				else
+					gDictionary[g * gDimensions + d] = 0;
 			}
 		}
+
+		//average_groups();
 		err = verify();
 	}
 	printf("%d iterations, avg error %3.3f\n", timeout, err);
@@ -528,7 +563,7 @@ void save_compare_data(const char* fn, int fast)
 	delete[] d.data_out;
 }
 
-enum optionIndex { UNKNOWN, HELP, SAMPLERATE, DIMENSIONS, MONO, WINDOW, SAVE, SAVESRC, SAVECMP, FASTRS, CUTTYPE, MAXITER, CUTS };
+enum optionIndex { UNKNOWN, HELP, SAMPLERATE, DIMENSIONS, MONO, WINDOW, SAVE, SAVESRC, SAVECMP, FASTRS, CUTTYPE, MAXITER, CUTS, OLDENC };
 const option::Descriptor usage[] =
 {
 	{ UNKNOWN,		0, "", "",	option::Arg::None,				 "USAGE: encoder inputfilename outputfilename [options]\n\nOptions:"},
@@ -544,13 +579,14 @@ const option::Descriptor usage[] =
 	{ FASTRS,       0, "f", "fastresample", option::Arg::None,   " -f --fastresample\t Use fast resampler (default: SINC_BEST)"},
 	{ CUTTYPE,		0, "x", "cuttype", option::Arg::Optional,    " -x --cuttype=type\t Subspace cut type: even, mean, average, median. (default: median)"},
 	{ MAXITER,      0, "i", "maxiter", option::Arg::Optional,    " -i --maxiter=iters\t Maximum iterations for re-centering grains (default:10)"},
+	{ OLDENC,       0, "l", "oldenc", option::Arg::None,         " -l --oldenc\t Use old encoder (default: use new)"},
 	{ UNKNOWN,      0, "", "", option::Arg::None,				 "Example:\n  encoder dasboot.mp3 theshoe.sad -m --gWindow=65536 -d16"},
 	{ 0,0,0,0,0,0 }
 };
 
 int main(int parc, char** pars)
 {
-	printf("LFAC encoder by Jari Komppa 2021 http://iki.fi/sol\n");
+	printf("LFAC encoder by Jari Komppa 2021-2023 http://iki.fi/sol\n");
 
 	option::Stats stats(usage, parc - 1, pars + 1);
 	assert(stats.buffer_max < 16 && stats.options_max < 16);
@@ -666,6 +702,8 @@ int main(int parc, char** pars)
 	if (options[SAVECMP] && options[SAVECMP].arg && strlen(options[SAVECMP].arg) > 0)
 		save_compare_data(options[SAVECMP].arg, !!options[FASTRS]);
 
+	bool oldenc = options[OLDENC];
+
 	unsigned int total_left = gDatalen;
 	prep_output(parse.nonOption(1));
 	int part = 0;
@@ -681,13 +719,30 @@ int main(int parc, char** pars)
 		else
 			gWindowSize = total_left;
 		if (gWindow == 0) gWindowSize = gDatalen;
-
-		init_encode();
-		reduce(cut_type, part, parts);
-		average_groups();
-		map_indices(maxiters);
-		verify();
-		
+		if (oldenc)
+		{
+			// old encoder
+			init_encode();
+			reduce(cut_type, part, parts);
+			average_groups();
+			map_indices(maxiters);
+			verify();
+		}
+		else
+		{
+			init_encode();
+			reduce(cut_type, part, parts);
+			gGroupCount = 256;
+			average_groups();
+			// new encoder
+			vq::reduce<unsigned char, 256, 0, 256>(
+				gChunkData + gWindowOffset,
+				gDimensions, 
+				gChunks,
+				gDictionary);
+			map_indices();
+			verify();
+		}
 		gWindowOffset += gWindowSize;
 		if (gWindow != 0 && gWindow * gDimensions < total_left)
 			total_left -= gWindow * gDimensions;
